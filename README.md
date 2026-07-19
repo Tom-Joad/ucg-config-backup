@@ -138,3 +138,11 @@ einsehen (identisch zu `docker compose logs`).
   API-Antwort kann sich zwischen Firmware-Versionen leicht unterscheiden;
   den vollständigen Log-Ausschnitt prüfen (`docker compose logs`), ggf.
   `UCG_SITE` kontrollieren (Site-Name statt `default`, falls umbenannt).
+- **`403` beim `cmd/backup`-Aufruf (Login lief durch)** — meist fehlende
+  Rechte: Das Konto braucht **volle Administrator-/"Full
+  Management"-Rechte für die Network-App**, nicht "Limited Admin" oder
+  "View Only". In der UniFi-OS-Oberfläche unter **Admins & Benutzer** die
+  Rolle des Backup-Kontos entsprechend anheben. Seltener liegt es an
+  einem rotierenden CSRF-Token zwischen Login und Backup-Aufruf — das
+  Script übernimmt automatisch einen von UniFi OS mitgesendeten
+  `x-updated-csrf-token`, falls vorhanden.

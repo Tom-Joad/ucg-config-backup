@@ -43,6 +43,15 @@ def notify(status, message):
         log(f"WARNING: webhook notification failed: {exc}")
 
 
+def refresh_csrf(session, resp):
+    # UniFi OS rotates the CSRF token on some firmware versions; if a
+    # response hands back a new one, subsequent requests must use it or
+    # they get rejected with 403 even though the session cookie is fine.
+    new_token = resp.headers.get("x-updated-csrf-token") or resp.headers.get("x-csrf-token")
+    if new_token:
+        session.headers["X-CSRF-Token"] = new_token
+
+
 def main():
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -69,6 +78,7 @@ def main():
             "which this script does not support -- use a dedicated local account without it."
         )
     session.headers.update({"X-CSRF-Token": csrf_token})
+    refresh_csrf(session, resp)
 
     log(f"Triggering backup on site '{SITE}'...")
     resp = session.post(
@@ -76,7 +86,16 @@ def main():
         json={"cmd": "backup", "days": "0"},
         timeout=30,
     )
+    if resp.status_code == 403:
+        raise RuntimeError(
+            "Backup command rejected (403). Most likely cause: UCG_USERNAME does not "
+            "have full Administrator / Full Management rights on the Network application "
+            "(e.g. it's a Limited Admin or View Only role) -- grant it full management "
+            "access and try again. If the role is already correct, this can also be a "
+            "stale CSRF token; retrying usually resolves that."
+        )
     resp.raise_for_status()
+    refresh_csrf(session, resp)
     payload = resp.json().get("data", [])
     if not payload or "url" not in payload[0]:
         raise RuntimeError(f"Unexpected backup response, no download URL: {resp.text[:500]}")
