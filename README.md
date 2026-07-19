@@ -50,49 +50,21 @@ Backups landen als `ucg-backup-<Zeitstempel>.unf` in `./backups`.
 
 ## Nutzung auf Unraid
 
-Der Container wird automatisch als Image gebaut und nach `ghcr.io/tom-joad/ucg-config-backup`
-gepusht (siehe `.github/workflows/docker-publish.yml`), das Repo bleibt
-dabei privat. Für die Installation über Unraids Docker-UI gibt es zwei
-Schritte:
+Der Container wird automatisch als Image gebaut und nach
+`ghcr.io/tom-joad/ucg-config-backup` gepusht (siehe
+`.github/workflows/docker-publish.yml`).
 
-### 1. Image-Zugriff einrichten
-
-Das GHCR-Package ist standardmäßig genauso sichtbar wie das Repo
-(privat). Zwei Optionen:
-
-- **Empfohlen — Package öffentlich schalten:** Das Image selbst enthält
-  keine Geheimnisse (Zugangsdaten werden erst zur Laufzeit per
-  Umgebungsvariable übergeben). Auf GitHub: Profil → **Packages** →
-  `ucg-config-backup` → **Package settings** → **Change visibility** →
-  **Public**. Danach kann Unraid ohne Login pullen.
-- **Alternativ — privat lassen:** Auf dem Unraid-Host per Terminal
-  einmalig einloggen (Personal Access Token mit Scope `read:packages`
-  reicht):
-  ```bash
-  docker login ghcr.io -u Tom-Joad -p <PERSONAL_ACCESS_TOKEN>
-  ```
-  Unraid nutzt für Docker-Pulls dieselbe lokale Docker-Konfiguration,
-  ein Neuanlegen des Containers über die GUI funktioniert danach auch
-  mit privatem Package.
-
-### 2. Template installieren
-
-Die fertige Vorlage liegt im Repo unter
-[`unraid-template.xml`](unraid-template.xml). Da das Quell-Repo privat
-ist, funktioniert das sonst übliche Eintragen einer Template-URL nicht
-ohne Login — stattdessen die Datei lokal auf den Flash-Share kopieren:
-
-1. Datei `unraid-template.xml` herunterladen (z. B. via `gh api` oder im
-   Browser über die GitHub-Weboberfläche, dort eingeloggt).
-2. Per Netzwerkfreigabe `\\<UNRAID-IP>\flash\config\plugins\dockerMan\templates-user\`
-   ablegen, z. B. als `ucg-config-backup.xml` (oder per Unraid-Terminal
-   nach `/boot/config/plugins/dockerMan/templates-user/` kopieren).
-3. Unraid-Weboberfläche → **Docker**-Tab → **Add Container** →
+1. Datei [`unraid-template.xml`](unraid-template.xml) auf den
+   Flash-Share kopieren, z. B. per Netzwerkfreigabe nach
+   `\\<UNRAID-IP>\flash\config\plugins\dockerMan\templates-user\`
+   (oder per Unraid-Terminal nach
+   `/boot/config/plugins/dockerMan/templates-user/`).
+2. Unraid-Weboberfläche → **Docker**-Tab → **Add Container** →
    Dropdown-Feld **Template** öffnen → `ucg-config-backup` auswählen.
    Alle Felder sind vorausgefüllt (Backup-Pfad, Env-Variablen).
-4. `UCG_HOST`, `UCG_USERNAME`, `UCG_PASSWORD` eintragen (siehe
+3. `UCG_HOST`, `UCG_USERNAME`, `UCG_PASSWORD` eintragen (siehe
    Voraussetzungen oben), restliche Werte bei Bedarf anpassen.
-5. **Apply** — der Container läuft danach nach `CRON_SCHEDULE` und
+4. **Apply** — der Container läuft danach nach `CRON_SCHEDULE` und
    schreibt die `.unf`-Dateien in den gewählten Backup-Pfad
    (Standard: `/mnt/user/appdata/ucg-config-backup/backups`).
 
