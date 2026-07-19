@@ -16,41 +16,16 @@ WEBHOOK_URL="${WEBHOOK_URL:-}"
 
 mkdir -p "${LOCAL_BACKUP_DIR}"
 
-# Quote a value for safe use inside single quotes in POSIX sh (handles
-# passwords that themselves contain a single quote).
-esc() { printf '%s' "$1" | sed "s/'/'\\\\''/g"; }
-
-# busybox crond runs jobs with a minimal environment, so hand the config
-# to backup.py via a sourced file instead of relying on inherited env vars.
-{
-  echo "export UCG_HOST='$(esc "${UCG_HOST}")'"
-  echo "export UCG_USERNAME='$(esc "${UCG_USERNAME}")'"
-  echo "export UCG_PASSWORD='$(esc "${UCG_PASSWORD}")'"
-  echo "export UCG_SITE='$(esc "${UCG_SITE}")'"
-  echo "export VERIFY_SSL='$(esc "${VERIFY_SSL}")'"
-  echo "export LOCAL_BACKUP_DIR='$(esc "${LOCAL_BACKUP_DIR}")'"
-  echo "export RETENTION_DAYS='$(esc "${RETENTION_DAYS}")'"
-  echo "export WEBHOOK_URL='$(esc "${WEBHOOK_URL}")'"
-  echo "export NOTIFY_ON_SUCCESS='$(esc "${NOTIFY_ON_SUCCESS}")'"
-} > /run/backup.env
-chmod 600 /run/backup.env
-
-cat > /usr/local/bin/run-backup.sh <<'EOF'
-#!/usr/bin/env sh
-set -a
-. /run/backup.env
-set +a
-exec python3 /usr/local/bin/backup.py
-EOF
-chmod +x /usr/local/bin/run-backup.sh
-
-echo "${CRON_SCHEDULE} /usr/local/bin/run-backup.sh >> /proc/1/fd/1 2>> /proc/1/fd/2" > /etc/crontabs/root
+# No config file needed: backup.py reads missing settings from
+# /proc/1/environ, which crond (exec'd below as PID 1) inherits from
+# this entrypoint. The password never touches the filesystem.
+echo "${CRON_SCHEDULE} python3 /usr/local/bin/backup.py >> /proc/1/fd/1 2>> /proc/1/fd/2" > /etc/crontabs/root
 
 echo "Scheduled backup: '${CRON_SCHEDULE}' (container timezone: $(date +%Z))"
 
 if [ "$RUN_ON_START" = "true" ]; then
   echo "RUN_ON_START=true, running an initial backup now..."
-  /usr/local/bin/run-backup.sh || echo "Initial backup failed; will retry on the next scheduled run."
+  python3 /usr/local/bin/backup.py || echo "Initial backup failed; will retry on the next scheduled run."
 fi
 
 exec crond -f -d 8

@@ -17,6 +17,17 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+# busybox crond runs jobs with a minimal environment. Instead of writing
+# the config (incl. the password) to a file on disk, pull it from PID 1's
+# environment -- crond inherited the container env from the entrypoint,
+# and /proc/1/environ is root-only and null-delimited (no quoting issues).
+if "UCG_HOST" not in os.environ:
+    with open("/proc/1/environ", "rb") as f:
+        for entry in f.read().split(b"\0"):
+            if b"=" in entry:
+                key, _, value = entry.partition(b"=")
+                os.environ.setdefault(key.decode(), value.decode())
+
 HOST = os.environ["UCG_HOST"]
 USERNAME = os.environ["UCG_USERNAME"]
 PASSWORD = os.environ["UCG_PASSWORD"]
