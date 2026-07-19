@@ -1,0 +1,89 @@
+# ucg-config-backup
+
+Docker-Container, der regelmäßig ein Config-Backup eines Ubiquiti UniFi
+Cloud Gateway Ultra (oder jeder anderen UniFi-OS-Konsole: UDM, UDM-Pro,
+UDM-SE, Cloud Key Gen2+ ...) über die lokale API auslöst und herunterlädt.
+
+## Funktionsweise
+
+Die "Automatischen System-Backups" von UniFi OS laufen nur, wenn die
+Konsole mit Ubiquiti's Cloud verbunden ist (das Backup wird dorthin
+hochgeladen) — ohne Cloud-Verbindung entstehen keine automatischen
+`.unf`-Dateien auf dem Gerät. Dieser Container umgeht das, indem er
+denselben lokalen API-Aufruf macht, den der "Backup herunterladen"-Button
+in der Network-App auslöst — das funktioniert komplett lokal, unabhängig
+vom Cloud-Status:
+
+1. Login an `/api/auth/login` mit einem lokalen Admin-Konto (Benutzername
+   + Passwort, keine Cloud-SSO, kein 2FA).
+2. `cmd/backup` über die (durch UniFi OS proxy­te) Network-API auslösen.
+3. Die zurückgegebene, einmalig gültige Download-URL abrufen und die
+   `.unf`-Datei nach `/backups` speichern.
+4. Lokale Backups älter als `RETENTION_DAYS` löschen, Fehler optional per
+   Webhook melden.
+
+Zeitplan läuft über `crond` im Container (`CRON_SCHEDULE`), zusätzlich
+optional ein Sofort-Lauf beim Start (`RUN_ON_START`).
+
+## Voraussetzungen auf der UCG Ultra
+
+Dediziertes lokales Admin-Konto für die Backups anlegen (kein
+Cloud-/SSO-Konto, keine Zwei-Faktor-Authentifizierung — beides würde
+diesen einfachen Login-Flow blockieren):
+
+UniFi-OS-Oberfläche → **Einstellungen → Admins & Benutzer** →
+**Admin einladen** → *"Restrict to local access only"* (oder
+vergleichbare Option je nach Firmware) aktivieren, Rolle **Administrator**
+(für `cmd/backup` erforderlich), 2FA für dieses Konto nicht aktivieren.
+
+## Nutzung
+
+```bash
+cp .env.example .env
+# .env anpassen: UCG_HOST, UCG_USERNAME, UCG_PASSWORD, ggf. Zeitplan/Retention
+
+docker compose up -d --build
+docker compose logs -f
+```
+
+Backups landen als `ucg-backup-<Zeitstempel>.unf` in `./backups`.
+
+## Konfiguration
+
+| Variable | Pflicht | Standard | Beschreibung |
+| --- | --- | --- | --- |
+| `UCG_HOST` | ja | – | IP/Hostname der UCG Ultra |
+| `UCG_USERNAME` | ja | – | Lokaler Admin-Benutzername (siehe oben) |
+| `UCG_PASSWORD` | ja | – | Passwort dieses Kontos |
+| `UCG_SITE` | nein | `default` | UniFi-Site-Name |
+| `VERIFY_SSL` | nein | `false` | TLS-Zertifikat prüfen (UniFi OS nutzt standardmäßig ein selbstsigniertes Zertifikat) |
+| `CRON_SCHEDULE` | nein | `0 3 * * *` | Cron-Ausdruck für den Backup-Lauf |
+| `RETENTION_DAYS` | nein | `30` | Lokale Backups älter als N Tage werden gelöscht (`0` = deaktiviert) |
+| `RUN_ON_START` | nein | `true` | Sofort-Backup beim Containerstart |
+| `NOTIFY_ON_SUCCESS` | nein | `false` | Auch bei Erfolg einen Webhook senden |
+| `WEBHOOK_URL` | nein | – | Ziel-URL für Klartext-POST-Benachrichtigungen (z. B. ntfy.sh, Healthchecks.io) |
+| `TZ` | nein | `UTC` | Zeitzone für Zeitplan/Logs |
+
+## Sicherheit
+
+- `.env` (enthält das Passwort) ist in `.gitignore` — landet nie im Repo.
+- `VERIFY_SSL=false` ist Standard, weil UniFi-OS-Konsolen werksseitig ein
+  selbstsigniertes Zertifikat verwenden; das Passwort wird trotzdem nur
+  innerhalb des eigenen LAN übertragen. Wer ein eigenes/vertrauenswürdiges
+  Zertifikat auf der Konsole hinterlegt hat, sollte `VERIFY_SSL=true`
+  setzen.
+- Für dieses Konto ausschließlich die Rechte vergeben, die für Backups
+  nötig sind (lokales Administrator-Konto ohne Cloud-Zugriff), nicht das
+  eigene Haupt-Login wiederverwenden.
+
+## Troubleshooting
+
+- **`Login rejected (401)`** — Benutzername/Passwort falsch, oder das
+  Konto ist ein Cloud-/SSO-Konto statt eines lokalen Kontos.
+- **`No CSRF token received after login`** — meist bedeutet das, dass für
+  das Konto 2FA aktiv ist; dieser einfache Flow unterstützt kein 2FA.
+  Dediziertes Konto ohne 2FA verwenden.
+- **`Unexpected backup response, no download URL`** — die Struktur der
+  API-Antwort kann sich zwischen Firmware-Versionen leicht unterscheiden;
+  den vollständigen Log-Ausschnitt prüfen (`docker compose logs`), ggf.
+  `UCG_SITE` kontrollieren (Site-Name statt `default`, falls umbenannt).

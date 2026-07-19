@@ -1,0 +1,20 @@
+services:
+  ucg-config-backup:
+    build: .
+    image: ucg-config-backup:latest
+    container_name: ucg-config-backup
+    restart: unless-stopped
+    environment:
+      UCG_HOST: ${UCG_HOST}
+      UCG_USERNAME: ${UCG_USERNAME}
+      UCG_PASSWORD: ${UCG_PASSWORD}
+      UCG_SITE: ${UCG_SITE:-default}
+      VERIFY_SSL: ${VERIFY_SSL:-false}
+      CRON_SCHEDULE: ${CRON_SCHEDULE:-0 3 * * *}
+      RETENTION_DAYS: ${RETENTION_DAYS:-30}
+      RUN_ON_START: ${RUN_ON_START:-true}
+      NOTIFY_ON_SUCCESS: ${NOTIFY_ON_SUCCESS:-false}
+      WEBHOOK_URL: ${WEBHOOK_URL:-}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ./backups:/backups
