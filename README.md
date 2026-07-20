@@ -100,9 +100,8 @@ services:
     restart: unless-stopped
 ```
 
-This repo also ships a `docker-compose.yml` that reads the same values
-from a `.env` file — copy `.env.example` to `.env`, fill it in, and run
-`docker compose up -d`.
+This repo ships a ready-to-use `docker-compose.yml` — edit the values
+under `environment:` to match your setup, then run `docker compose up -d`.
 
 ### docker cli
 
@@ -225,8 +224,8 @@ A single volume mount at `/backups` is enough to persist all output.
   `VERIFY_SSL=true`.
 * Use a dedicated local admin account scoped to what backups need — don't
   reuse your primary login.
-* When using `docker-compose` with a `.env` file, that file holds the
-  password and is git-ignored — keep it out of version control.
+* The `docker-compose.yml` holds the password inline — if you commit a
+  customized copy to your own repo, keep that repo private.
 
 ## Troubleshooting
 
