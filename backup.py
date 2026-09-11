@@ -11,9 +11,12 @@ import os
 import pathlib
 import sys
 import time
+import urllib.parse
 
 import requests
 import urllib3
+
+VERSION = "1.1.0"
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -21,22 +24,38 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # the config (incl. the password) to a file on disk, pull it from PID 1's
 # environment -- crond inherited the container env from the entrypoint,
 # and /proc/1/environ is root-only and null-delimited (no quoting issues).
+# Nothing at module level may raise: a broken environment has to reach the
+# top-level guard below so it still gets reported via the webhook.
 if "UCG_HOST" not in os.environ:
-    with open("/proc/1/environ", "rb") as f:
-        for entry in f.read().split(b"\0"):
-            if b"=" in entry:
-                key, _, value = entry.partition(b"=")
-                os.environ.setdefault(key.decode(), value.decode())
+    try:
+        with open("/proc/1/environ", "rb") as f:
+            for entry in f.read().split(b"\0"):
+                if b"=" in entry:
+                    key, _, value = entry.partition(b"=")
+                    os.environ.setdefault(key.decode(), value.decode())
+    except (OSError, UnicodeDecodeError):
+        pass
+    # TZ may only have arrived just now; make localtime() pick it up.
+    time.tzset()
 
-HOST = os.environ["UCG_HOST"]
-USERNAME = os.environ["UCG_USERNAME"]
-PASSWORD = os.environ["UCG_PASSWORD"]
+HOST = os.environ.get("UCG_HOST", "")
+USERNAME = os.environ.get("UCG_USERNAME", "")
+PASSWORD = os.environ.get("UCG_PASSWORD", "")
 SITE = os.environ.get("UCG_SITE", "default")
 VERIFY_SSL = os.environ.get("VERIFY_SSL", "false").strip().lower() == "true"
 BACKUP_DIR = pathlib.Path(os.environ.get("LOCAL_BACKUP_DIR", "/backups"))
-RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "30"))
+try:
+    RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "30"))
+except ValueError:
+    RETENTION_DAYS = None  # rejected in main(), so the failure goes out via the webhook
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")
+WEBHOOK_FORMAT = os.environ.get("WEBHOOK_FORMAT", "text").strip().lower() or "text"
 NOTIFY_ON_SUCCESS = os.environ.get("NOTIFY_ON_SUCCESS", "false").strip().lower() == "true"
+
+# Seconds to wait before each webhook retry. Home Assistant is briefly
+# unreachable while it restarts, and the default 03:00 run can land in a
+# maintenance window -- retry a little, but never block the run for long.
+WEBHOOK_RETRY_DELAYS = (2, 5)
 
 BASE = f"https://{HOST}"
 
@@ -45,13 +64,65 @@ def log(msg):
     print(f"[{datetime.datetime.now():%Y-%m-%d %H:%M:%S}] {msg}", flush=True)
 
 
-def notify(status, message):
+def redact_url(url):
+    # The URL path is usually the secret (HA webhook id, ntfy topic,
+    # Healthchecks UUID), so only scheme and host ever reach the log.
+    parts = urllib.parse.urlsplit(url)
+    return f"{parts.scheme}://{parts.netloc.rpartition('@')[2]}/..."
+
+
+def build_payload(ok, message, run):
+    # Every key is always present (null when unknown): Home Assistant
+    # templates turn a missing key into `undefined`, but can handle null.
+    return {
+        "status": "ok" if ok else "failed",
+        "message": message,
+        "filename": run["filename"],
+        "size_bytes": run["size_bytes"],
+        "duration_s": round(time.monotonic() - run["started"], 1),
+        "host": HOST or None,
+        "site": SITE,
+        "retention_days": RETENTION_DAYS,
+        "backups_kept": run["backups_kept"],
+        "timestamp": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+        "version": VERSION,
+    }
+
+
+def notify(ok, message, run):
     if not WEBHOOK_URL:
         return
-    try:
-        requests.post(WEBHOOK_URL, data=f"UCG backup {status}: {message}".encode(), timeout=10)
-    except requests.RequestException as exc:
-        log(f"WARNING: webhook notification failed: {exc}")
+    if WEBHOOK_FORMAT == "json":
+        # requests sets Content-Type: application/json itself; Home
+        # Assistant's webhook trigger only parses JSON and form bodies.
+        body = {"json": build_payload(ok, message, run)}
+    else:
+        if WEBHOOK_FORMAT != "text":
+            log(f"WARNING: unknown WEBHOOK_FORMAT '{WEBHOOK_FORMAT}', falling back to 'text'.")
+        body = {"data": f"UCG backup {'OK' if ok else 'FAILED'}: {message}".encode()}
+
+    target = redact_url(WEBHOOK_URL)
+    for attempt in range(len(WEBHOOK_RETRY_DELAYS) + 1):
+        # A failing webhook must never fail the backup run, hence the broad
+        # catch. Only the exception type is logged: requests puts the full
+        # URL (and with it the secret) into its messages.
+        try:
+            resp = requests.post(WEBHOOK_URL, timeout=10, **body)
+        except Exception as exc:  # noqa: BLE001
+            problem = type(exc).__name__
+        else:
+            if resp.ok:
+                return
+            problem = f"HTTP {resp.status_code}"
+            if resp.status_code < 500:
+                log(f"WARNING: webhook to {target} rejected ({problem}), not retrying.")
+                return
+        if attempt < len(WEBHOOK_RETRY_DELAYS):
+            delay = WEBHOOK_RETRY_DELAYS[attempt]
+            log(f"WARNING: webhook to {target} failed ({problem}), retrying in {delay}s...")
+            time.sleep(delay)
+        else:
+            log(f"WARNING: webhook to {target} failed ({problem}), giving up after {attempt + 1} attempts.")
 
 
 def refresh_csrf(session, resp):
@@ -63,7 +134,13 @@ def refresh_csrf(session, resp):
         session.headers["X-CSRF-Token"] = new_token
 
 
-def main():
+def main(run):
+    missing = [name for name in ("UCG_HOST", "UCG_USERNAME", "UCG_PASSWORD") if not os.environ.get(name)]
+    if missing:
+        raise RuntimeError(f"Missing required setting(s): {', '.join(missing)}")
+    if RETENTION_DAYS is None:
+        raise RuntimeError(f"RETENTION_DAYS must be an integer, got '{os.environ['RETENTION_DAYS']}'")
+
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 
     session = requests.Session()
@@ -128,6 +205,8 @@ def main():
     filename = f"ucg-backup-{datetime.datetime.now():%Y%m%d-%H%M%S}.unf"
     target = BACKUP_DIR / filename
     target.write_bytes(dl.content)
+    run["filename"] = filename
+    run["size_bytes"] = len(dl.content)
     log(f"Saved {target} ({len(dl.content)} bytes).")
 
     try:
@@ -144,16 +223,18 @@ def main():
                 removed += 1
         if removed:
             log(f"Retention: removed {removed} backup(s) older than {RETENTION_DAYS} days.")
+    run["backups_kept"] = sum(1 for _ in BACKUP_DIR.glob("ucg-backup-*.unf"))
 
     log("Backup completed successfully.")
-    if NOTIFY_ON_SUCCESS:
-        notify("OK", filename)
 
 
 if __name__ == "__main__":
+    run = {"started": time.monotonic(), "filename": None, "size_bytes": None, "backups_kept": None}
     try:
-        main()
+        main(run)
     except Exception as exc:  # noqa: BLE001 - top-level guard, must always notify+exit non-zero
         log(f"ERROR: {exc}")
-        notify("FAILED", str(exc))
+        notify(False, str(exc) or type(exc).__name__, run)
         sys.exit(1)
+    if NOTIFY_ON_SUCCESS:
+        notify(True, run["filename"], run)

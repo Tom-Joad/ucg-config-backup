@@ -23,6 +23,8 @@ Network app uses: it logs in with a local admin account, triggers
   * [Unraid](#unraid)
   * [Synology (Container Manager / Docker)](#synology-container-manager--docker)
 * [Environment variables](#environment-variables)
+* [Webhook notifications](#webhook-notifications)
+  * [Home Assistant](#home-assistant)
 * [Volumes / paths](#volumes--paths)
 * [Security notes](#security-notes)
 * [Troubleshooting](#troubleshooting)
@@ -202,8 +204,88 @@ your existing 3-2-1 backup rotation.
 | `RETENTION_DAYS` | | `30` | Delete local backups older than N days (`0` = keep forever) |
 | `RUN_ON_START` | | `true` | Run a backup immediately when the container starts |
 | `NOTIFY_ON_SUCCESS` | | `false` | Also send a webhook on success, not just on failure |
-| `WEBHOOK_URL` | | – | URL for plain-text POST notifications (e.g. ntfy.sh, Healthchecks.io) |
+| `WEBHOOK_URL` | | – | URL to POST run notifications to (e.g. ntfy.sh, Healthchecks.io, Home Assistant) — treat it as a secret, see [Webhook notifications](#webhook-notifications) |
+| `WEBHOOK_FORMAT` | | `text` | `text` for a plain-text body, `json` for structured fields (Home Assistant) |
 | `TZ` | | `UTC` | Timezone for the schedule and log timestamps |
+
+## Webhook notifications
+
+If `WEBHOOK_URL` is set, the container sends a POST after a failed run —
+and after a successful one too with `NOTIFY_ON_SUCCESS=true`.
+`WEBHOOK_FORMAT` picks the body:
+
+* **`text`** (default) — `UCG backup OK: <filename>` or
+  `UCG backup FAILED: <error>` as a plain-text body. Works with ntfy.sh and
+  Healthchecks.io.
+* **`json`** — an `application/json` body with a fixed set of fields.
+  Use this for Home Assistant: its webhook trigger only parses JSON and
+  form bodies and silently drops a plain-text one.
+
+```json
+{
+  "status": "ok",
+  "message": "ucg-backup-20260911-030014.unf",
+  "filename": "ucg-backup-20260911-030014.unf",
+  "size_bytes": 2410496,
+  "duration_s": 12.4,
+  "host": "192.168.1.1",
+  "site": "default",
+  "retention_days": 30,
+  "backups_kept": 30,
+  "timestamp": "2026-09-11T03:00:26+02:00",
+  "version": "1.1.0"
+}
+```
+
+| Field | Description |
+| --- | --- |
+| `status` | Always `ok` or `failed` (lowercase) — the value to trigger on |
+| `message` | Human-readable part: the filename on success, the error on failure |
+| `filename` | Name of the saved `.unf` file |
+| `size_bytes` | Size of the saved file — use it to catch empty or suspiciously small backups that still report `ok` |
+| `duration_s` | Run duration in seconds |
+| `host`, `site` | `UCG_HOST` and `UCG_SITE` of the run |
+| `retention_days` | Effective `RETENTION_DAYS` |
+| `backups_kept` | Number of `ucg-backup-*.unf` files in `/backups` after retention |
+| `timestamp` | ISO 8601 with the offset of `TZ` |
+| `version` | Container version |
+
+Every key is always present; values that aren't known (e.g. `filename`
+when the login failed) are `null`.
+
+A failing webhook never fails the backup run: connection errors and
+`5xx` answers are retried twice (after 2 s and 5 s), then the run carries
+on. Logs only ever show the scheme and host of `WEBHOOK_URL`, since its
+path usually is the secret (HA webhook id, ntfy topic, Healthchecks UUID).
+
+### Home Assistant
+
+Set `WEBHOOK_FORMAT=json` and point `WEBHOOK_URL` at a webhook trigger,
+e.g. `http://homeassistant.local:8123/api/webhook/ucg-backup-change-me`.
+This automation pushes a notification whenever a run fails:
+
+```yaml
+automation:
+  - alias: "UCG backup failed"
+    triggers:
+      - trigger: webhook
+        webhook_id: ucg-backup-change-me
+        allowed_methods: [POST]
+        local_only: true
+    conditions:
+      - condition: template
+        value_template: "{{ trigger.json.status == 'failed' }}"
+    actions:
+      - action: notify.notify
+        data:
+          title: "UCG backup failed"
+          message: "{{ trigger.json.message }}"
+```
+
+With `NOTIFY_ON_SUCCESS=true` every run reports in, so Home Assistant can
+also track `trigger.json.timestamp` as a heartbeat and warn on an unusual
+`size_bytes`. Pick a long random webhook id — anyone who knows it can
+trigger the automation.
 
 ## Volumes / paths
 
@@ -266,6 +348,9 @@ docker build \
 
 ## Versions
 
+* **11.09.2026:** — 1.1.0: `WEBHOOK_FORMAT=json` for structured
+  notifications (Home Assistant), webhook retries, webhook URL no longer
+  logged, and configuration errors are now reported via the webhook too.
 * **19.07.2026:** — Initial release: local-API backup flow, cron
   scheduling, retention, webhook notifications, multi-arch image, and
   Unraid/Synology documentation.

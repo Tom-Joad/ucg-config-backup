@@ -14,6 +14,7 @@ services:
       RUN_ON_START: "true"
       NOTIFY_ON_SUCCESS: "false"
       WEBHOOK_URL: ""
+      WEBHOOK_FORMAT: text
       TZ: Europe/Berlin
     volumes:
       - ./backups:/backups
