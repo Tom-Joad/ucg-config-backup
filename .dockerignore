@@ -4,3 +4,5 @@ config/
 README.md
 .github/
 tests/
+__pycache__/
+.pytest_cache/
