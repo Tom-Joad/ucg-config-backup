@@ -148,7 +148,7 @@ You can add this container in one of two ways.
 
 **Option A — from the pre-filled template (recommended):**
 
-1. Copy [`unraid-template.xml`](unraid-template.xml) onto the Unraid flash
+1. Copy [`unraid/ucg-config-backup.xml`](unraid/ucg-config-backup.xml) onto the Unraid flash
    share, e.g. via the network share to
    `\\<UNRAID-IP>\flash\config\plugins\dockerMan\templates-user\` (or from
    the Unraid terminal into

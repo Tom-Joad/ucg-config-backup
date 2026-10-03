@@ -1,0 +1,37 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>ucg-config-backup</Name>
+  <Repository>ghcr.io/tom-joad/ucg-config-backup:latest</Repository>
+  <Registry>https://ghcr.io</Registry>
+  <Network>bridge</Network>
+  <Shell>bash</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/Tom-Joad/ucg-config-backup</Support>
+  <Project>https://github.com/Tom-Joad/ucg-config-backup</Project>
+  <TemplateURL>https://raw.githubusercontent.com/Tom-Joad/ucg-config-backup/main/unraid/ucg-config-backup.xml</TemplateURL>
+  <Overview>
+    Logs in to the local UniFi OS API of a UCG Ultra (or another UniFi OS console), triggers a
+    config backup and downloads it on a cron schedule. The console needs no cloud connection.
+    Old backups are deleted after RETENTION_DAYS; failures (and optionally successes) can be
+    sent to a webhook. Progress is in the container log.
+  </Overview>
+  <Category>Backup: Network:Other</Category>
+  <ExtraParams>--security-opt no-new-privileges</ExtraParams>
+  <Config Name="Backup Directory" Target="/backups" Default="/mnt/user/appdata/ucg-config-backup/backups" Mode="rw" Description="Where the .unf backup files are stored" Type="Path" Display="always" Required="true" Mask="false"/>
+  <Config Name="Config Directory" Target="/config" Default="/mnt/user/appdata/ucg-config-backup/config" Mode="rw" Description="The container's own state (crontab)" Type="Path" Display="advanced" Required="true" Mask="false"/>
+  <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="User that owns the backups (nobody)" Type="Variable" Display="always" Required="true" Mask="false"/>
+  <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="Group for the backups (users)" Type="Variable" Display="always" Required="true" Mask="false"/>
+  <Config Name="UMASK" Target="UMASK" Default="002" Mode="" Description="002: new files are writable for the users group, e.g. over SMB" Type="Variable" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="TZ" Target="TZ" Default="Europe/Berlin" Mode="" Description="Time zone for the schedule and the log" Type="Variable" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="UCG_HOST" Target="UCG_HOST" Default="" Mode="" Description="IP address or host name of the UCG Ultra / UniFi OS console" Type="Variable" Display="always" Required="true" Mask="false"/>
+  <Config Name="UCG_USERNAME" Target="UCG_USERNAME" Default="" Mode="" Description="Local admin user dedicated to backups (no cloud/SSO account, no 2FA)" Type="Variable" Display="always" Required="true" Mask="false"/>
+  <Config Name="UCG_PASSWORD" Target="UCG_PASSWORD" Default="" Mode="" Description="Password of that user" Type="Variable" Display="always" Required="true" Mask="true"/>
+  <Config Name="UCG_SITE" Target="UCG_SITE" Default="default" Mode="" Description="UniFi site name" Type="Variable" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="VERIFY_SSL" Target="VERIFY_SSL" Default="false" Mode="" Description="Check the console's TLS certificate (UniFi OS ships a self-signed one)" Type="Variable" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="CRON_SCHEDULE" Target="CRON_SCHEDULE" Default="0 3 * * *" Mode="" Description="When the backup runs (cron: minute hour day month weekday)" Type="Variable" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="RETENTION_DAYS" Target="RETENTION_DAYS" Default="30" Mode="" Description="Delete local backups older than N days (0 = keep everything)" Type="Variable" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="RUN_ON_START" Target="RUN_ON_START" Default="true" Mode="" Description="Run a backup right after the container starts" Type="Variable" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="NOTIFY_ON_SUCCESS" Target="NOTIFY_ON_SUCCESS" Default="false" Mode="" Description="Also notify the webhook on success, not only on failure" Type="Variable" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="WEBHOOK_URL" Target="WEBHOOK_URL" Default="" Mode="" Description="Optional: URL for POST notifications (ntfy.sh, Healthchecks.io, Home Assistant webhook). Usually contains a secret" Type="Variable" Display="advanced" Required="false" Mask="true"/>
+  <Config Name="WEBHOOK_FORMAT" Target="WEBHOOK_FORMAT" Default="text" Mode="" Description="text (plain text, ntfy.sh/Healthchecks.io) or json (structured fields, Home Assistant)" Type="Variable" Display="advanced" Required="false" Mask="false"/>
+</Container>

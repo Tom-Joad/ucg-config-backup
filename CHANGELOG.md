@@ -5,6 +5,26 @@ All notable changes to this project are listed here. Versions follow
 upgrading (a renamed or removed setting, a different folder layout, a changed
 webhook payload) only comes with a new major version.
 
+## [2.1.1] - 2026-10-03
+
+### Fixed
+- **The container showed as unhealthy.** The health check looked for a
+  process named `crond`, but the base image runs cron as `busybox crond`.
+  It now checks the command line, so a running scheduler counts as healthy.
+
+### Changed
+- The Unraid template moved to `unraid/ucg-config-backup.xml`, is in English
+  and carries its `TemplateURL`, so Unraid picks up template changes.
+  `PUID` and `PGID` are shown by default, and Extra Parameters set
+  `--security-opt no-new-privileges`.
+- `docker-compose.yml` sets `no-new-privileges` and rotates the container
+  log (10 MB, 3 files).
+
+### Added
+- CI builds the image and runs a smoke test on every push and pull request
+  (settings check, cron, health check, ownership, start-up run, password
+  never in a file), plus shellcheck and a template check.
+
 ## [2.1.0] - 2026-10-03
 
 ### Changed
