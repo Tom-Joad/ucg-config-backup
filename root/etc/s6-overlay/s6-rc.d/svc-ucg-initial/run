@@ -1,0 +1,10 @@
+#!/usr/bin/with-contenv bash
+# shellcheck shell=bash
+
+# Runs once per container start and then stays down (s6-svc -O).
+s6-svc -O .
+
+if [[ ${RUN_ON_START:-true} == true ]]; then
+    echo "RUN_ON_START=true, running an initial backup now..."
+    /usr/local/bin/ucg-backup || echo "Initial backup failed; will retry on the next scheduled run."
+fi

@@ -16,27 +16,15 @@ import urllib.parse
 import requests
 import urllib3
 
-VERSION = "1.1.0"
+VERSION = "2.0.0"
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# busybox crond runs jobs with a minimal environment. Instead of writing
-# the config (incl. the password) to a file on disk, pull it from PID 1's
-# environment -- crond inherited the container env from the entrypoint,
-# and /proc/1/environ is root-only and null-delimited (no quoting issues).
-# Nothing at module level may raise: a broken environment has to reach the
-# top-level guard below so it still gets reported via the webhook.
-if "UCG_HOST" not in os.environ:
-    try:
-        with open("/proc/1/environ", "rb") as f:
-            for entry in f.read().split(b"\0"):
-                if b"=" in entry:
-                    key, _, value = entry.partition(b"=")
-                    os.environ.setdefault(key.decode(), value.decode())
-    except (OSError, UnicodeDecodeError):
-        pass
-    # TZ may only have arrived just now; make localtime() pick it up.
-    time.tzset()
+# Settings come from the environment. Under cron, /usr/local/bin/ucg-backup
+# fills it from the container environment (with-contenv), so the password
+# never touches the file system. Nothing at module level may raise: a broken
+# environment has to reach the top-level guard below so it still gets
+# reported via the webhook.
 
 HOST = os.environ.get("UCG_HOST", "")
 USERNAME = os.environ.get("UCG_USERNAME", "")
@@ -229,6 +217,9 @@ def main(run):
 
 
 if __name__ == "__main__":
+    if "--version" in sys.argv[1:]:
+        print(VERSION)
+        sys.exit(0)
     run = {"started": time.monotonic(), "filename": None, "size_bytes": None, "backups_kept": None}
     try:
         main(run)

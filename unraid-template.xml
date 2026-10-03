@@ -22,6 +22,7 @@
   <DonateLink/>
   <Requires/>
   <Config Name="Backup Directory" Target="/backups" Default="/mnt/user/appdata/ucg-config-backup/backups" Mode="rw" Description="Lokaler Ordner, in dem die .unf-Backup-Dateien gespeichert werden" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/ucg-config-backup/backups</Config>
+  <Config Name="Config Directory" Target="/config" Default="/mnt/user/appdata/ucg-config-backup/config" Mode="rw" Description="Interner Zustand des Containers (Crontab)" Type="Path" Display="advanced" Required="true" Mask="false">/mnt/user/appdata/ucg-config-backup/config</Config>
   <Config Name="UCG_HOST" Target="UCG_HOST" Default="" Mode="" Description="IP-Adresse oder Hostname der UCG Ultra / UniFi-OS-Konsole" Type="Variable" Display="always" Required="true" Mask="false"></Config>
   <Config Name="UCG_USERNAME" Target="UCG_USERNAME" Default="" Mode="" Description="Lokaler Admin-Benutzername (kein Cloud-/SSO-Konto, ohne 2FA), dediziert fuer Backups" Type="Variable" Display="always" Required="true" Mask="false"></Config>
   <Config Name="UCG_PASSWORD" Target="UCG_PASSWORD" Default="" Mode="" Description="Passwort des obigen Kontos" Type="Variable" Display="always" Required="true" Mask="true"></Config>
@@ -33,5 +34,8 @@
   <Config Name="NOTIFY_ON_SUCCESS" Target="NOTIFY_ON_SUCCESS" Default="false" Mode="" Description="Auch bei Erfolg eine Webhook-Benachrichtigung senden, nicht nur bei Fehlern" Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
   <Config Name="WEBHOOK_URL" Target="WEBHOOK_URL" Default="" Mode="" Description="Optional: URL fuer POST-Benachrichtigungen bei Fehlern (z. B. ntfy.sh, Healthchecks.io, Home-Assistant-Webhook). Enthaelt meist ein Geheimnis (Webhook-ID)" Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
   <Config Name="WEBHOOK_FORMAT" Target="WEBHOOK_FORMAT" Default="text" Mode="" Description="Format der Benachrichtigung: text (Klartext, fuer ntfy.sh/Healthchecks.io) oder json (strukturierte Felder, fuer Home Assistant)" Type="Variable" Display="advanced" Required="false" Mask="false">text</Config>
+  <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="Benutzer-ID, unter der die Backups geschrieben werden (Unraid: 99 = nobody)" Type="Variable" Display="advanced" Required="false" Mask="false">99</Config>
+  <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="Gruppen-ID der Backup-Dateien (Unraid: 100 = users)" Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
+  <Config Name="UMASK" Target="UMASK" Default="002" Mode="" Description="Umask der Backup-Dateien (002 = Gruppe darf schreiben, passend zu SMB-Freigaben)" Type="Variable" Display="advanced" Required="false" Mask="false">002</Config>
   <Config Name="TZ" Target="TZ" Default="Europe/Berlin" Mode="" Description="Zeitzone fuer Zeitplan und Logs" Type="Variable" Display="advanced" Required="false" Mask="false">Europe/Berlin</Config>
 </Container>

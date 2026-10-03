@@ -22,6 +22,7 @@ Network app uses: it logs in with a local admin account, triggers
   * [docker cli](#docker-cli)
   * [Unraid](#unraid)
   * [Synology (Container Manager / Docker)](#synology-container-manager--docker)
+* [Parameters](#parameters)
 * [Environment variables](#environment-variables)
 * [Webhook notifications](#webhook-notifications)
   * [Home Assistant](#home-assistant)
@@ -96,8 +97,12 @@ services:
       - UCG_PASSWORD=change-me
       - CRON_SCHEDULE=0 3 * * *
       - RETENTION_DAYS=30
+      - PUID=1000
+      - PGID=1000
+      - UMASK=022
       - TZ=Europe/Berlin
     volumes:
+      - /path/to/config:/config
       - /path/to/backups:/backups
     restart: unless-stopped
 ```
@@ -116,7 +121,11 @@ docker run -d \
   -e UCG_HOST=192.168.1.1 \
   -e UCG_USERNAME=backup-bot \
   -e UCG_PASSWORD=change-me \
+  -e PUID=1000 \
+  -e PGID=1000 \
+  -e UMASK=022 \
   -e TZ=Europe/Berlin \
+  -v /path/to/config:/config \
   -v /path/to/backups:/backups \
   --restart unless-stopped \
   ghcr.io/tom-joad/ucg-config-backup:latest
@@ -134,8 +143,10 @@ You can add this container in one of two ways.
    the Unraid terminal into
    `/boot/config/plugins/dockerMan/templates-user/`).
 2. **Docker** tab → **Add Container** → open the **Template** dropdown →
-   select `ucg-config-backup`. All fields are pre-filled (backup path,
-   environment variables).
+   select `ucg-config-backup`. All fields are pre-filled (config and backup
+   path, `PUID=99`, `PGID=100`, `UMASK=002`, environment variables). With
+   these values the backups belong to `nobody:users` and can be edited and
+   deleted over SMB.
 3. Set `UCG_HOST`, `UCG_USERNAME`, `UCG_PASSWORD` (see
    [Prerequisites](#prerequisites-on-the-ucg-ultra)); adjust the rest as
    needed.
@@ -151,9 +162,11 @@ You can add this container in one of two ways.
    * **Network Type**: `Bridge`
 3. **Path Mappings**: Container Path `/backups` → Host Path e.g.
    `/mnt/user/appdata/ucg-config-backup/backups` (or a share you already
-   back up elsewhere).
-4. **Variables**: add `UCG_HOST`, `UCG_USERNAME`, `UCG_PASSWORD`, and any
-   optional variables from the table below (at minimum set `TZ`).
+   back up elsewhere), and `/config` →
+   `/mnt/user/appdata/ucg-config-backup/config`.
+4. **Variables**: add `UCG_HOST`, `UCG_USERNAME`, `UCG_PASSWORD`,
+   `PUID=99`, `PGID=100`, `UMASK=002`, and any optional variables from the
+   table below (at minimum set `TZ`).
 5. Apply, then check **Docker** → container icon → **Logs** to confirm the
    first backup ran cleanly.
 
@@ -179,8 +192,10 @@ registry first.
    wizard:
    * **Port Settings**: none needed — this container exposes no ports.
    * **Volume**: add a folder mapping for a shared folder (e.g.
-     `docker/ucg-config-backup/backups`) → `/backups`.
+     `docker/ucg-config-backup/backups`) → `/backups`, and one (e.g.
+     `docker/ucg-config-backup/config`) → `/config`.
    * **Environment**: add `UCG_HOST`, `UCG_USERNAME`, `UCG_PASSWORD`,
+     `PUID`, `PGID` (the ID of your DSM user, see `id <user>` over SSH),
      `TZ`, and any optional variables below.
    * Enable **Enable auto-restart**.
 4. Start the container, then confirm via **Container** → **Details** →
@@ -190,6 +205,23 @@ registry first.
 You can also schedule DSM's own **Hyper Backup** or a **Task Scheduler**
 job to copy that shared folder off the NAS, so the UniFi config ends up in
 your existing 3-2-1 backup rotation.
+
+## Parameters
+
+Container images are configured using parameters passed at runtime (such
+as those above). The usual linuxserver.io parameters apply:
+
+| Parameter | Function |
+| :----: | --- |
+| `-e PUID=1000` | User ID the backup runs as, and the owner of the backup files |
+| `-e PGID=1000` | Group ID of the same |
+| `-e UMASK=022` | Umask of the backup files (`002` lets the group write) |
+| `-e TZ=Europe/Berlin` | Timezone for the schedule and log timestamps |
+| `-v /config` | The container's own state (the crontab) |
+| `-v /backups` | The downloaded `.unf` backup files |
+
+Don't use `--user` or `--init`; the image runs s6-overlay as PID 1 and
+drops to `PUID:PGID` itself.
 
 ## Environment variables
 
@@ -206,6 +238,8 @@ your existing 3-2-1 backup rotation.
 | `NOTIFY_ON_SUCCESS` | | `false` | Also send a webhook on success, not just on failure |
 | `WEBHOOK_URL` | | – | URL to POST run notifications to (e.g. ntfy.sh, Healthchecks.io, Home Assistant) — treat it as a secret, see [Webhook notifications](#webhook-notifications) |
 | `WEBHOOK_FORMAT` | | `text` | `text` for a plain-text body, `json` for structured fields (Home Assistant) |
+| `PUID` / `PGID` | | `911` | User and group ID of the backup files, see [Parameters](#parameters) |
+| `UMASK` | | `022` | Umask of the backup files |
 | `TZ` | | `UTC` | Timezone for the schedule and log timestamps |
 
 ## Webhook notifications
@@ -233,7 +267,7 @@ and after a successful one too with `NOTIFY_ON_SUCCESS=true`.
   "retention_days": 30,
   "backups_kept": 30,
   "timestamp": "2026-09-11T03:00:26+02:00",
-  "version": "1.1.0"
+  "version": "2.0.0"
 }
 ```
 
@@ -291,15 +325,21 @@ trigger the automation.
 
 | Path | Contents |
 | --- | --- |
-| `/backups` | Downloaded `.unf` backup files, named `ucg-backup-<timestamp>.unf` |
+| `/backups` | Downloaded `.unf` backup files, named `ucg-backup-<timestamp>.unf`, owned by `PUID:PGID` |
+| `/config` | The container's own state: the crontab in `/config/crontabs/root` is regenerated from `CRON_SCHEDULE` at every start |
 
-A single volume mount at `/backups` is enough to persist all output.
+`/backups` alone is enough to keep all output. If the host folder for
+`/backups` or `/config` doesn't exist yet or belongs to root, the
+container hands it to `PUID:PGID` at start (not recursively); folders that
+already belong to someone else are left alone.
 
 ## Security notes
 
 * Credentials are passed as environment variables and read from the
-  container's process environment at runtime — the password is never
-  written to the image or to a file on disk.
+  container environment at runtime (s6 `with-contenv`, kept in a tmpfs) —
+  the password is never written to the image or to a file on disk.
+* The backup runs as the unprivileged `abc` user (`PUID:PGID`), not as
+  root. Only the cron daemon itself and the start-up scripts run as root.
 * `VERIFY_SSL=false` is the default because UniFi OS consoles ship a
   self-signed certificate; the login still only travels across your own
   LAN. If you've installed a trusted certificate on the console, set
@@ -330,10 +370,10 @@ A single volume mount at `/backups` is enough to persist all output.
 ## Support info
 
 * Shell access while the container is running:
-  `docker exec -it ucg-config-backup /bin/sh`
+  `docker exec -it ucg-config-backup /bin/bash`
 * Follow the logs in realtime: `docker logs -f ucg-config-backup`
 * Trigger an on-demand backup without waiting for the schedule:
-  `docker exec ucg-config-backup python3 /usr/local/bin/backup.py`
+  `docker exec ucg-config-backup /usr/local/bin/ucg-backup`
 
 ## Building locally
 
@@ -348,6 +388,10 @@ docker build \
 
 ## Versions
 
+* **03.10.2026:** — 2.0.0: rebuilt on the linuxserver.io Alpine base
+  image (s6-overlay): `PUID`/`PGID`/`UMASK`, backups no longer owned by
+  root, new `/config` volume. See the [changelog](CHANGELOG.md) for the
+  upgrade steps.
 * **11.09.2026:** — 1.1.0: `WEBHOOK_FORMAT=json` for structured
   notifications (Home Assistant), webhook retries, webhook URL no longer
   logged, and configuration errors are now reported via the webhook too.
