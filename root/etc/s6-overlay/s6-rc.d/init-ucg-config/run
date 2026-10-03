@@ -1,0 +1,35 @@
+#!/usr/bin/with-contenv bash
+# shellcheck shell=bash
+
+for name in UCG_HOST UCG_USERNAME UCG_PASSWORD; do
+    if [[ -z ${!name:-} ]]; then
+        echo "${name} is required" >&2
+        # A failed oneshot alone leaves the container running without a
+        # scheduler; stop it so the problem is visible.
+        /run/s6/basedir/bin/halt
+        exit 1
+    fi
+done
+
+CRON_SCHEDULE="${CRON_SCHEDULE:-0 3 * * *}"
+BACKUP_DIR="${LOCAL_BACKUP_DIR:-/backups}"
+
+mkdir -p /config/crontabs "${BACKUP_DIR}"
+
+if [[ -z ${LSIO_NON_ROOT_USER} ]]; then
+    # Not recursive: a large backup folder would make every start slow.
+    lsiown abc:abc /config
+    # A folder Docker created itself (missing host path, fresh volume) belongs
+    # to root and abc couldn't write the backups. One that already belongs to
+    # someone else is left as it is.
+    if [[ $(stat -c %u "${BACKUP_DIR}") == 0 ]]; then
+        lsiown abc:abc "${BACKUP_DIR}"
+    fi
+fi
+
+# The job runs from root's crontab so its output reaches the container log
+# (/proc/1/fd is root-only); the wrapper drops to abc before running Python.
+echo "${CRON_SCHEDULE} /usr/local/bin/ucg-backup >> /proc/1/fd/1 2>> /proc/1/fd/2" > /config/crontabs/root
+crontab -u root /config/crontabs/root
+
+echo "Scheduled backup: '${CRON_SCHEDULE}' (container timezone: $(date +%Z))"

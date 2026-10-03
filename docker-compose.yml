@@ -4,6 +4,9 @@ services:
     container_name: ucg-config-backup
     restart: unless-stopped
     environment:
+      PUID: 99
+      PGID: 100
+      UMASK: "002"
       UCG_HOST: 192.168.1.1
       UCG_USERNAME: backup-bot
       UCG_PASSWORD: change-me
@@ -17,4 +20,5 @@ services:
       WEBHOOK_FORMAT: text
       TZ: Europe/Berlin
     volumes:
+      - ./config:/config
       - ./backups:/backups

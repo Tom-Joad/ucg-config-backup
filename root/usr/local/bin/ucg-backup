@@ -1,0 +1,9 @@
+#!/usr/bin/with-contenv bash
+# shellcheck shell=bash
+
+# with-contenv puts the container environment (including the password, which
+# never touches the file system) into this process. UMASK only applies to
+# s6 services on its own, not to cron jobs.
+umask "${UMASK:-022}"
+
+exec s6-setuidgid abc python3 /usr/local/bin/backup.py "$@"
