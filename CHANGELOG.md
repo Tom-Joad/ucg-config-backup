@@ -5,6 +5,14 @@ All notable changes to this project are listed here. Versions follow
 upgrading (a renamed or removed setting, a different folder layout, a changed
 webhook payload) only comes with a new major version.
 
+## [Unreleased]
+
+### Changed
+- Images are signed with cosign 3 (new signature format). Verifying them needs
+  a cosign 3.x client; `2.0.0` and older still verify with cosign 2 and 3.
+- Dependency updates: linuxserver.io base image 3.24 (Python 3.14), and newer
+  versions of the Docker and cosign GitHub Actions.
+
 ## [2.0.0] - 2026-10-03
 
 ### Changed
