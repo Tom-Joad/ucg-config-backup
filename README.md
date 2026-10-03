@@ -80,8 +80,8 @@ correct image for your architecture.
 | \<version\> | ✅ | A specific release, e.g. `2.0.0`, or `2.0` for the latest patch of a minor |
 | \<sha\> | ✅ | Immutable build of a specific commit |
 
-Images are only built from `v*` tags. They are signed with cosign; to
-verify one:
+Images are only built from `v*` tags. They are signed with cosign (releases after 2.0.0 need a cosign 3.x client to
+verify; 2.0.0 and older also verify with 2.x). To verify one:
 
 ```bash
 cosign verify ghcr.io/tom-joad/ucg-config-backup:latest \

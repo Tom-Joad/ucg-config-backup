@@ -30,7 +30,8 @@ inbound ports.
 Images are built by GitHub Actions from version tags only. Third-party
 actions are pinned to commit SHAs. Dependencies are checked with `pip-audit`,
 and the repository is scanned with `gitleaks`. Images are scanned with Trivy
-and signed keylessly with cosign. To verify an image:
+and signed keylessly with cosign. To verify an image (needs cosign 3.x for
+releases after 2.0.0; 2.0.0 and older also verify with cosign 2.x):
 
 ```bash
 cosign verify ghcr.io/tom-joad/ucg-config-backup:latest \
