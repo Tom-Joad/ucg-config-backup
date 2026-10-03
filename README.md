@@ -278,7 +278,7 @@ and after a successful one too with `NOTIFY_ON_SUCCESS=true`.
   "retention_days": 30,
   "backups_kept": 30,
   "timestamp": "2026-09-11T03:00:26+02:00",
-  "version": "2.0.0"
+  "version": "2.1.0"
 }
 ```
 
@@ -399,6 +399,8 @@ docker build \
 
 ## Versions
 
+* **03.10.2026:** — 2.1.0: images are signed with cosign 3 (verifying needs a
+  cosign 3.x client), base image updated to Alpine 3.24, build actions updated.
 * **03.10.2026:** — 2.0.0: rebuilt on the linuxserver.io Alpine base
   image (s6-overlay): `PUID`/`PGID`/`UMASK`, backups no longer owned by
   root, new `/config` volume. See the [changelog](CHANGELOG.md) for the
