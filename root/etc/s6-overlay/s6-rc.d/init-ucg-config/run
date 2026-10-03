@@ -4,6 +4,9 @@
 for name in UCG_HOST UCG_USERNAME UCG_PASSWORD; do
     if [[ -z ${!name:-} ]]; then
         echo "${name} is required" >&2
+        # A failed oneshot alone leaves the container running without a
+        # scheduler; stop it so the problem is visible.
+        /run/s6/basedir/bin/halt
         exit 1
     fi
 done
