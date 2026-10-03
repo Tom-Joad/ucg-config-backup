@@ -68,15 +68,25 @@ correct image for your architecture.
 
 | Architecture | Available | Tag |
 | :----: | :----: | ---- |
-| x86-64 | ✅ | latest / \<sha tag\> |
-| arm64 | ✅ | latest / \<sha tag\> |
+| x86-64 | ✅ | latest / \<version\> |
+| arm64 | ✅ | latest / \<version\> |
 
 ## Version tags
 
 | Tag | Available | Description |
 | :----: | :----: | --- |
-| latest | ✅ | Latest build from `main` |
-| \<sha\> | ✅ | Immutable build pinned to a specific commit |
+| latest | ✅ | Latest release |
+| \<version\> | ✅ | A specific release, e.g. `2.0.0`, or `2.0` for the latest patch of a minor |
+| \<sha\> | ✅ | Immutable build of a specific commit |
+
+Images are only built from `v*` tags. They are signed with cosign; to
+verify one:
+
+```bash
+cosign verify ghcr.io/tom-joad/ucg-config-backup:latest \
+  --certificate-identity-regexp 'https://github.com/Tom-Joad/ucg-config-backup/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
 
 ## Usage
 
