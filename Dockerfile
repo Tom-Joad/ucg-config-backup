@@ -1,4 +1,4 @@
-# linuxserver.io's Alpine 3.23 base: s6-overlay, PUID/PGID/UMASK/TZ, the abc
+# linuxserver.io's Alpine 3.24 base: s6-overlay, PUID/PGID/UMASK/TZ, the abc
 # user, cron and docker mods, as in every linuxserver.io container.
 # Pinned by digest (a multi-arch index); Dependabot proposes new digests.
 FROM ghcr.io/linuxserver/baseimage-alpine:3.24@sha256:e4772029b98af17b6670341d07cbd54138a3dc7f6323af1ef76bbc02fd0a813d
@@ -36,8 +36,10 @@ VOLUME /config
 # Backups are written here, owned by PUID:PGID.
 VOLUME /backups
 
-HEALTHCHECK --interval=5m --timeout=5s --retries=3 \
-  CMD pgrep crond || exit 1
+# The base image runs cron as `busybox crond`, so the process name is
+# "busybox"; match the command line instead.
+HEALTHCHECK --interval=5m --timeout=5s --start-period=30s --retries=3 \
+  CMD pgrep -f "^busybox crond" >/dev/null || exit 1
 
 # The entrypoint stays the base image's /init (s6-overlay), which must run as
 # PID 1: don't add `--init` to `docker run`, and don't use `--user` (set

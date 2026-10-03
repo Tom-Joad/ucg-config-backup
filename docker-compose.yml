@@ -22,3 +22,10 @@ services:
     volumes:
       - ./config:/config
       - ./backups:/backups
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
