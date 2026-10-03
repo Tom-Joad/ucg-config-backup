@@ -1,0 +1,46 @@
+name: Bug report
+description: Something doesn't work as described.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Never post passwords, webhook URLs or backup files.**
+        An issue is public, and a `.unf` file contains your whole console
+        configuration. Log lines and settings are almost always enough.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The image tag, or the `version` field of a webhook payload.
+      placeholder: "2.0.0"
+    validations:
+      required: true
+  - type: input
+    id: console
+    attributes:
+      label: Console and firmware
+      placeholder: "UCG Ultra, UniFi OS 4.x, Network 9.x"
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log lines
+      description: |
+        `docker logs ucg-config-backup`, around the problem. Check them for
+        host names, user names or URLs you don't want to share first.
+      render: text
+  - type: textarea
+    id: setup
+    attributes:
+      label: Setup
+      description: |
+        How you run it (Unraid, Synology, docker compose) and the settings
+        you changed. Leave out `UCG_PASSWORD` and `WEBHOOK_URL`.

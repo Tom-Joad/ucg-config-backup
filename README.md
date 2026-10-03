@@ -32,6 +32,7 @@ Network app uses: it logs in with a local admin account, triggers
 * [Support info](#support-info)
 * [Building locally](#building-locally)
 * [Versions](#versions)
+* [License](#license)
 
 ## How it works
 
@@ -408,3 +409,7 @@ docker build \
 * **19.07.2026:** — Initial release: local-API backup flow, cron
   scheduling, retention, webhook notifications, multi-arch image, and
   Unraid/Synology documentation.
+
+## License
+
+[MIT](LICENSE)
