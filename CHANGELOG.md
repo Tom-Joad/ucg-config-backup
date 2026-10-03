@@ -5,7 +5,7 @@ All notable changes to this project are listed here. Versions follow
 upgrading (a renamed or removed setting, a different folder layout, a changed
 webhook payload) only comes with a new major version.
 
-## [2.0.0] - Unreleased
+## [2.0.0] - 2026-10-03
 
 ### Changed
 - **Rebuilt on the linuxserver.io Alpine base image** (s6-overlay). The
