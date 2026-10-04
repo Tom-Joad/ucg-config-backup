@@ -60,6 +60,8 @@ for _ in $(seq 1 60); do
 done
 
 in_log 'RUN_ON_START=true' || fail "no start-up run"
+in_log 'BASED ON IMAGES FROM LINUXSERVER\.IO' || fail "the start banner is not ours"
+if in_log 'Based on images from linuxserver\.io'; then fail "the base image's banner is still shown"; fi
 in_log 'ERROR: ' || fail "the start-up backup didn't run or didn't log its failure"
 
 # The health check's own command.
