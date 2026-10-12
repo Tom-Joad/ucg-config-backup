@@ -5,6 +5,12 @@ All notable changes to this project are listed here. Versions follow
 upgrading (a renamed or removed setting, a different folder layout, a changed
 webhook payload) only comes with a new major version.
 
+## [2.1.3] - 2026-10-12
+
+### Changed
+- The image is built on the current `baseimage-alpine` 3.24 release, with
+  the latest Alpine package updates.
+
 ## [2.1.2] - 2026-10-04
 
 ### Changed
