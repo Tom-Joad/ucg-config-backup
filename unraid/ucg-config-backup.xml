@@ -8,6 +8,7 @@
   <Privileged>false</Privileged>
   <Support>https://github.com/Tom-Joad/ucg-config-backup</Support>
   <Project>https://github.com/Tom-Joad/ucg-config-backup</Project>
+  <Icon>https://raw.githubusercontent.com/Tom-Joad/unraid-templates/main/icons/ucg-config-backup.png</Icon>
   <TemplateURL>https://raw.githubusercontent.com/Tom-Joad/ucg-config-backup/main/unraid/ucg-config-backup.xml</TemplateURL>
   <Overview>
     Logs in to the local UniFi OS API of a UCG Ultra (or another UniFi OS console), triggers a
