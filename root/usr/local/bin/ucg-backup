@@ -6,4 +6,13 @@
 # s6 services on its own, not to cron jobs.
 umask "${UMASK:-022}"
 
+# One backup at a time: the start-up run and a scheduled one, or a manual
+# `docker exec`, must not log in to the console side by side. The lock is
+# held on fd 9 through the exec below.
+exec 9>>/tmp/ucg-backup.lock
+if ! flock -n 9; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: a backup is already running, skipping this one."
+    exit 0
+fi
+
 exec s6-setuidgid abc python3 /usr/local/bin/backup.py "$@"

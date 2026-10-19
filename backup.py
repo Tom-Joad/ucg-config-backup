@@ -16,7 +16,7 @@ import urllib.parse
 import requests
 import urllib3
 
-VERSION = "2.1.3"
+VERSION = "2.1.4"
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -130,6 +130,7 @@ def main(run):
         raise RuntimeError(f"RETENTION_DAYS must be an integer, got '{os.environ['RETENTION_DAYS']}'")
 
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    log(f"ucg-config-backup {VERSION} starting")
 
     session = requests.Session()
     session.verify = VERIFY_SSL
@@ -192,7 +193,14 @@ def main(run):
 
     filename = f"ucg-backup-{datetime.datetime.now():%Y%m%d-%H%M%S}.unf"
     target = BACKUP_DIR / filename
-    target.write_bytes(dl.content)
+    # Written under a hidden name and renamed when complete: a run that dies
+    # half-way leaves no partial backup that retention would count as one.
+    partial = BACKUP_DIR / f".{filename}.partial"
+    try:
+        partial.write_bytes(dl.content)
+        partial.replace(target)
+    finally:
+        partial.unlink(missing_ok=True)
     run["filename"] = filename
     run["size_bytes"] = len(dl.content)
     log(f"Saved {target} ({len(dl.content)} bytes).")

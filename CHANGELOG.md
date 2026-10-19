@@ -5,6 +5,24 @@ All notable changes to this project are listed here. Versions follow
 upgrading (a renamed or removed setting, a different folder layout, a changed
 webhook payload) only comes with a new major version.
 
+## [2.1.4] - 2026-10-19
+
+### Fixed
+- A backup is written under a hidden name and renamed when complete, so a
+  run that dies half-way leaves no partial `.unf` that the retention counts.
+- Only one backup runs at a time: a scheduled run that starts while another
+  one is still going (the start-up run, a manual `docker exec`) is skipped
+  with a warning.
+- The base image's own maintenance jobs stay in root's crontab; the backup
+  is added to them instead of replacing them.
+- A `CRON_SCHEDULE` that isn't five fields, or a missing `UCG_HOST`,
+  `UCG_USERNAME` or `UCG_PASSWORD`, stops the container with an `ERROR:`
+  line.
+
+### Changed
+- Every run logs the version first.
+- New base image digest (`linuxserver/baseimage-alpine:3.24`).
+
 ## [2.1.3] - 2026-10-12
 
 ### Changed
