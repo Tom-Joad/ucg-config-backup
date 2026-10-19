@@ -44,7 +44,13 @@ version=$(docker run --rm --entrypoint python3 "$IMAGE" /usr/local/bin/backup.py
 echo "== without UCG_HOST the container stops"
 docker run -d --name "$NAME" -e UCG_USERNAME=x -e UCG_PASSWORD=x "$IMAGE" >/dev/null
 wait_for_exit || fail "kept running without UCG_HOST"
-in_log 'UCG_HOST is required' || fail "no message about UCG_HOST"
+in_log 'ERROR: UCG_HOST is required' || fail "no message about UCG_HOST"
+docker rm -f "$NAME" >/dev/null
+
+echo "== a schedule that isn't five fields stops the container"
+docker run -d --name "$NAME" -e UCG_HOST=x -e UCG_USERNAME=x -e UCG_PASSWORD=x -e CRON_SCHEDULE='every day' "$IMAGE" >/dev/null
+wait_for_exit || fail "kept running with a broken CRON_SCHEDULE"
+in_log 'ERROR: CRON_SCHEDULE must have five fields' || fail "no ERROR about CRON_SCHEDULE"
 docker rm -f "$NAME" >/dev/null
 
 echo "== start"
@@ -68,6 +74,13 @@ in_log 'ERROR: ' || fail "the start-up backup didn't run or didn't log its failu
 docker exec "$NAME" sh -c 'pgrep -f "^busybox crond" >/dev/null' || fail "crond is not running"
 crontab=$(docker exec "$NAME" crontab -l -u root)
 grep -qF '17 4 * * * /usr/local/bin/ucg-backup' <<<"$crontab" || fail "schedule not in root's crontab"
+grep -qF 'run-parts /etc/periodic/daily' <<<"$crontab" || fail "the base image's own cron jobs were dropped"
+
+# One backup at a time: with the lock held, a second run is skipped.
+docker exec -d "$NAME" sh -c 'exec 9>>/tmp/ucg-backup.lock; flock 9; sleep 10'
+sleep 1
+second=$(docker exec "$NAME" /usr/local/bin/ucg-backup 2>&1 || true)
+grep -q 'already running, skipping' <<<"$second" || fail "a second run was not skipped: $second"
 
 [[ $(docker exec "$NAME" id -u abc) == "$PUID" ]] || fail "abc doesn't have PUID"
 [[ $(stat -c %u "$WORK/config") == "$PUID" ]] || fail "/config not owned by PUID"

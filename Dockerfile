@@ -1,7 +1,7 @@
 # linuxserver.io's Alpine 3.24 base: s6-overlay, PUID/PGID/UMASK/TZ, the abc
 # user, cron and docker mods, as in every linuxserver.io container.
 # Pinned by digest (a multi-arch index); Dependabot proposes new digests.
-FROM ghcr.io/linuxserver/baseimage-alpine:3.24@sha256:d2deff7a9aff1388bd79ded33a4efda6bd4b26358f9234a23deccba724738fea
+FROM ghcr.io/linuxserver/baseimage-alpine:3.24@sha256:b661ece23fbc86a96a0c014c911c36b923f3c767a73255a5131eaae9f103167c
 
 # image.source makes a GHCR package inherit the repository's visibility.
 LABEL org.opencontainers.image.source="https://github.com/Tom-Joad/ucg-config-backup" \
@@ -9,8 +9,11 @@ LABEL org.opencontainers.image.source="https://github.com/Tom-Joad/ucg-config-ba
       org.opencontainers.image.description="Scheduled local config backups of a UniFi OS console (UCG Ultra, UDM, ...), no cloud connection needed" \
       org.opencontainers.image.licenses="MIT"
 
+# A failing init step (a missing or malformed setting) stops the container
+# instead of leaving it up without a scheduler.
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    S6_BEHAVIOUR_IF_STAGE2_FAILS=2
 
 COPY requirements.txt /tmp/requirements.txt
 
@@ -25,6 +28,10 @@ RUN apk add --no-cache python3 \
  && rm /tmp/requirements.txt
 
 COPY backup.py /usr/local/bin/backup.py
+# The base image's own root crontab (its periodic maintenance jobs); the init
+# step appends the backup to it instead of replacing it.
+RUN mkdir -p /usr/local/share/ucg-config-backup \
+ && cp /etc/crontabs/root /usr/local/share/ucg-config-backup/crontab.root
 # s6 services (init-ucg-config, svc-ucg-initial) and the cron wrapper.
 COPY root/ /
 RUN chmod +x /usr/local/bin/backup.py /usr/local/bin/ucg-backup \

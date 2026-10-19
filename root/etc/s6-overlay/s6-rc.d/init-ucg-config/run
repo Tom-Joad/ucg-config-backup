@@ -1,17 +1,26 @@
 #!/usr/bin/with-contenv bash
 # shellcheck shell=bash
 
+# Checks the settings and writes the schedule. An `exit 1` here stops the
+# container (S6_BEHAVIOUR_IF_STAGE2_FAILS=2), so a problem is visible.
+
+failed=0
 for name in UCG_HOST UCG_USERNAME UCG_PASSWORD; do
     if [[ -z ${!name:-} ]]; then
-        echo "${name} is required" >&2
-        # A failed oneshot alone leaves the container running without a
-        # scheduler; stop it so the problem is visible.
-        /run/s6/basedir/bin/halt
-        exit 1
+        echo "ERROR: ${name} is required" >&2
+        failed=1
     fi
 done
 
 CRON_SCHEDULE="${CRON_SCHEDULE:-0 3 * * *}"
+# Five fields of digits, names, *, /, comma and hyphen. Anything else would
+# leave crond without a job and the container looking healthy.
+if [[ ! ${CRON_SCHEDULE} =~ ^[0-9A-Za-z*/,-]+([[:space:]]+[0-9A-Za-z*/,-]+){4}$ ]]; then
+    echo "ERROR: CRON_SCHEDULE must have five fields, e.g. '0 3 * * *', got '${CRON_SCHEDULE}'" >&2
+    failed=1
+fi
+[[ ${failed} == 0 ]] || exit 1
+
 BACKUP_DIR="${LOCAL_BACKUP_DIR:-/backups}"
 
 mkdir -p /config/crontabs "${BACKUP_DIR}"
@@ -29,7 +38,11 @@ fi
 
 # The job runs from root's crontab so its output reaches the container log
 # (/proc/1/fd is root-only); the wrapper drops to abc before running Python.
-echo "${CRON_SCHEDULE} /usr/local/bin/ucg-backup >> /proc/1/fd/1 2>> /proc/1/fd/2" > /config/crontabs/root
+# The base image's own entries stay.
+{
+    cat /usr/local/share/ucg-config-backup/crontab.root
+    echo "${CRON_SCHEDULE} /usr/local/bin/ucg-backup >> /proc/1/fd/1 2>> /proc/1/fd/2"
+} > /config/crontabs/root
 crontab -u root /config/crontabs/root
 
 echo "Scheduled backup: '${CRON_SCHEDULE}' (container timezone: $(date +%Z))"

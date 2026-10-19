@@ -69,16 +69,16 @@ correct image for your architecture.
 
 | Architecture | Available | Tag |
 | :----: | :----: | ---- |
-| x86-64 | ✅ | latest / \<version\> |
-| arm64 | ✅ | latest / \<version\> |
+| x86-64 | yes | latest / \<version\> |
+| arm64 | yes | latest / \<version\> |
 
 ## Version tags
 
 | Tag | Available | Description |
 | :----: | :----: | --- |
-| latest | ✅ | Latest release |
-| \<version\> | ✅ | A specific release, e.g. `2.0.0`, or `2.0` for the latest patch of a minor |
-| \<sha\> | ✅ | Immutable build of a specific commit |
+| latest | yes | Latest release |
+| \<version\> | yes | A specific release, e.g. `2.0.0`, or `2.0` for the latest patch of a minor |
+| \<sha\> | yes | Immutable build of a specific commit |
 
 Images are only built from `v*` tags. They are signed with cosign (releases after 2.0.0 need a cosign 3.x client to
 verify; 2.0.0 and older also verify with 2.x). To verify one:
@@ -238,12 +238,12 @@ drops to `PUID:PGID` itself.
 
 | Variable | Required | Default | Description |
 | --- | :----: | --- | --- |
-| `UCG_HOST` | ✅ | – | IP or hostname of the UCG Ultra |
-| `UCG_USERNAME` | ✅ | – | Local admin username (see [Prerequisites](#prerequisites-on-the-ucg-ultra)) |
-| `UCG_PASSWORD` | ✅ | – | Password for that account |
+| `UCG_HOST` | yes | – | IP or hostname of the UCG Ultra |
+| `UCG_USERNAME` | yes | – | Local admin username (see [Prerequisites](#prerequisites-on-the-ucg-ultra)) |
+| `UCG_PASSWORD` | yes | – | Password for that account |
 | `UCG_SITE` | | `default` | UniFi site name |
 | `VERIFY_SSL` | | `false` | Verify the console's TLS certificate (UniFi OS ships a self-signed cert by default) |
-| `CRON_SCHEDULE` | | `0 3 * * *` | Cron expression for the backup run |
+| `CRON_SCHEDULE` | | `0 3 * * *` | Cron expression for the backup run (five fields; anything else stops the container with an `ERROR:` line) |
 | `RETENTION_DAYS` | | `30` | Delete local backups older than N days (`0` = keep forever) |
 | `RUN_ON_START` | | `true` | Run a backup immediately when the container starts |
 | `NOTIFY_ON_SUCCESS` | | `false` | Also send a webhook on success, not just on failure |
