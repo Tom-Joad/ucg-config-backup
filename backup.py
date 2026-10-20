@@ -16,15 +16,14 @@ import urllib.parse
 import requests
 import urllib3
 
-VERSION = "2.1.4"
+VERSION = "2.2.0"
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Settings come from the environment. Under cron, /usr/local/bin/ucg-backup
-# fills it from the container environment (with-contenv), so the password
-# never touches the file system. Nothing at module level may raise: a broken
-# environment has to reach the top-level guard below so it still gets
-# reported via the webhook.
+# fills it from the container environment (with-contenv). Nothing at module
+# level may raise: a broken environment has to reach the top-level guard
+# below so it still gets reported via the webhook.
 
 HOST = os.environ.get("UCG_HOST", "")
 USERNAME = os.environ.get("UCG_USERNAME", "")
@@ -36,6 +35,8 @@ try:
     RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "30"))
 except ValueError:
     RETENTION_DAYS = None  # rejected in main(), so the failure goes out via the webhook
+if RETENTION_DAYS is not None and RETENTION_DAYS < 0:
+    RETENTION_DAYS = None
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")
 WEBHOOK_FORMAT = os.environ.get("WEBHOOK_FORMAT", "text").strip().lower() or "text"
 NOTIFY_ON_SUCCESS = os.environ.get("NOTIFY_ON_SUCCESS", "false").strip().lower() == "true"
@@ -44,6 +45,14 @@ NOTIFY_ON_SUCCESS = os.environ.get("NOTIFY_ON_SUCCESS", "false").strip().lower()
 # unreachable while it restarts, and the default 03:00 run can land in a
 # maintenance window -- retry a little, but never block the run for long.
 WEBHOOK_RETRY_DELAYS = (2, 5)
+
+# A run killed half-way (SIGKILL, a container stop) leaves its hidden
+# .partial file behind. Older ones than this can't belong to a running backup.
+PARTIAL_MAX_AGE_S = 3600
+
+# What a console sends instead of a backup when something is off (a login
+# page, an error object). A .unf file is encrypted binary.
+NOT_A_BACKUP_TYPES = ("text/html", "application/json")
 
 BASE = f"https://{HOST}"
 
@@ -127,7 +136,9 @@ def main(run):
     if missing:
         raise RuntimeError(f"Missing required setting(s): {', '.join(missing)}")
     if RETENTION_DAYS is None:
-        raise RuntimeError(f"RETENTION_DAYS must be an integer, got '{os.environ['RETENTION_DAYS']}'")
+        raise RuntimeError(
+            f"RETENTION_DAYS must be a whole number of 0 or more, got '{os.environ['RETENTION_DAYS']}'"
+        )
 
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     log(f"ucg-config-backup {VERSION} starting")
@@ -136,6 +147,22 @@ def main(run):
     session.verify = VERIFY_SSL
 
     log(f"Logging in to {HOST} as {USERNAME}...")
+    login(session)
+    # Logged out on every path, so a failed run leaves no session open on
+    # the console.
+    try:
+        save_backup(session, run)
+    finally:
+        try:
+            session.post(f"{BASE}/api/auth/logout", timeout=10)
+        except requests.RequestException:
+            pass
+
+    apply_retention(run)
+    log("Backup completed successfully.")
+
+
+def login(session):
     resp = session.post(
         f"{BASE}/api/auth/login",
         json={"username": USERNAME, "password": PASSWORD},
@@ -157,6 +184,8 @@ def main(run):
     session.headers.update({"X-CSRF-Token": csrf_token})
     refresh_csrf(session, resp)
 
+
+def save_backup(session, run):
     log(f"Triggering backup on site '{SITE}'...")
     resp = session.post(
         f"{BASE}/proxy/network/api/s/{SITE}/cmd/backup",
@@ -190,6 +219,9 @@ def main(run):
     dl.raise_for_status()
     if not dl.content:
         raise RuntimeError("Downloaded backup file is empty.")
+    content_type = dl.headers.get("content-type", "").split(";")[0].strip().lower()
+    if content_type in NOT_A_BACKUP_TYPES:
+        raise RuntimeError(f"Download returned {content_type} instead of a backup file.")
 
     filename = f"ucg-backup-{datetime.datetime.now():%Y%m%d-%H%M%S}.unf"
     target = BACKUP_DIR / filename
@@ -205,23 +237,27 @@ def main(run):
     run["size_bytes"] = len(dl.content)
     log(f"Saved {target} ({len(dl.content)} bytes).")
 
-    try:
-        session.post(f"{BASE}/api/auth/logout", timeout=10)
-    except requests.RequestException:
-        pass
+
+def apply_retention(run):
+    now = time.time()
+    for f in BACKUP_DIR.glob(".ucg-backup-*.unf.partial"):
+        if f.stat().st_mtime < now - PARTIAL_MAX_AGE_S:
+            f.unlink()
+            log(f"Removed {f.name} left behind by an interrupted run.")
 
     if RETENTION_DAYS > 0:
-        cutoff = time.time() - RETENTION_DAYS * 86400
+        cutoff = now - RETENTION_DAYS * 86400
         removed = 0
+        freed = 0
         for f in BACKUP_DIR.glob("ucg-backup-*.unf"):
-            if f.stat().st_mtime < cutoff:
+            st = f.stat()
+            if st.st_mtime < cutoff:
                 f.unlink()
                 removed += 1
+                freed += st.st_size
         if removed:
-            log(f"Retention: removed {removed} backup(s) older than {RETENTION_DAYS} days.")
+            log(f"Retention: removed {removed} backup(s) older than {RETENTION_DAYS} days, freed {freed} bytes.")
     run["backups_kept"] = sum(1 for _ in BACKUP_DIR.glob("ucg-backup-*.unf"))
-
-    log("Backup completed successfully.")
 
 
 if __name__ == "__main__":

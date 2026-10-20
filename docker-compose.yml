@@ -3,24 +3,22 @@ services:
     image: ghcr.io/tom-joad/ucg-config-backup:latest
     container_name: ucg-config-backup
     restart: unless-stopped
+    # The console login and the webhook URL; copy .env.example to .env.
+    env_file:
+      - .env
     environment:
       PUID: 99
       PGID: 100
       UMASK: "002"
-      UCG_HOST: 192.168.1.1
-      UCG_USERNAME: backup-bot
-      UCG_PASSWORD: change-me
       UCG_SITE: default
       VERIFY_SSL: "false"
       CRON_SCHEDULE: "0 3 * * *"
       RETENTION_DAYS: "30"
       RUN_ON_START: "true"
       NOTIFY_ON_SUCCESS: "false"
-      WEBHOOK_URL: ""
       WEBHOOK_FORMAT: text
       TZ: Europe/Berlin
     volumes:
-      - ./config:/config
       - ./backups:/backups
     security_opt:
       - no-new-privileges:true

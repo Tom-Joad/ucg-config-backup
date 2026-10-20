@@ -53,8 +53,22 @@ wait_for_exit || fail "kept running with a broken CRON_SCHEDULE"
 in_log 'ERROR: CRON_SCHEDULE must have five fields' || fail "no ERROR about CRON_SCHEDULE"
 docker rm -f "$NAME" >/dev/null
 
+echo "== without any volume the schedule is installed"
+docker run -d --name "$NAME" -e UCG_HOST=x -e UCG_USERNAME=x -e UCG_PASSWORD=x \
+    -e RUN_ON_START=false -e CRON_SCHEDULE='5 2 * * *' "$IMAGE" >/dev/null
+for _ in $(seq 1 30); do
+    in_log '\[ls\.io-init\] done' && break
+    sleep 1
+done
+crontab=$(docker exec "$NAME" crontab -l -u root)
+grep -qF '5 2 * * * /usr/local/bin/ucg-backup' <<<"$crontab" || fail "schedule not installed without volumes"
+docker rm -f "$NAME" >/dev/null
+
 echo "== start"
-mkdir -p "$WORK/config" "$WORK/backups"
+# A /config mount left over from 2.1.x, with its old crontab: the image no
+# longer uses it, and the schedule from CRON_SCHEDULE has to win.
+mkdir -p "$WORK/config/crontabs" "$WORK/backups"
+echo '1 1 * * * /usr/local/bin/ucg-backup' > "$WORK/config/crontabs/root"
 # Nothing listens on 443 inside the container, so the login fails at once.
 docker run -d --name "$NAME" -e PUID="$PUID" -e PGID="$PGID" \
     -e UCG_HOST=127.0.0.1 -e UCG_USERNAME=smoke -e UCG_PASSWORD="$SECRET" \
@@ -74,6 +88,7 @@ in_log 'ERROR: ' || fail "the start-up backup didn't run or didn't log its failu
 docker exec "$NAME" sh -c 'pgrep -f "^busybox crond" >/dev/null' || fail "crond is not running"
 crontab=$(docker exec "$NAME" crontab -l -u root)
 grep -qF '17 4 * * * /usr/local/bin/ucg-backup' <<<"$crontab" || fail "schedule not in root's crontab"
+if grep -qF '1 1 * * *' <<<"$crontab"; then fail "the old crontab from /config was installed"; fi
 grep -qF 'run-parts /etc/periodic/daily' <<<"$crontab" || fail "the base image's own cron jobs were dropped"
 
 # One backup at a time: with the lock held, a second run is skipped.
@@ -83,10 +98,11 @@ second=$(docker exec "$NAME" /usr/local/bin/ucg-backup 2>&1 || true)
 grep -q 'already running, skipping' <<<"$second" || fail "a second run was not skipped: $second"
 
 [[ $(docker exec "$NAME" id -u abc) == "$PUID" ]] || fail "abc doesn't have PUID"
-[[ $(stat -c %u "$WORK/config") == "$PUID" ]] || fail "/config not owned by PUID"
 [[ $(stat -c %u "$WORK/backups") == "$PUID" ]] || fail "/backups not owned by PUID"
 
-# The password is never written to a file.
+# The password is never written to a file of the app's own. (s6 keeps the
+# container environment in /run/s6/container_environment, as in every
+# linuxserver.io image; that is documented, not tested here.)
 if docker exec "$NAME" grep -rqs "$SECRET" /config /backups /etc /tmp; then
     fail "the password was written to a file"
 fi

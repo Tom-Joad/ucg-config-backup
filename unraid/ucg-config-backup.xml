@@ -19,7 +19,6 @@
   <Category>Backup: Network:Other</Category>
   <ExtraParams>--security-opt no-new-privileges</ExtraParams>
   <Config Name="Backup Directory" Target="/backups" Default="/mnt/user/appdata/ucg-config-backup/backups" Mode="rw" Description="Where the .unf backup files are stored" Type="Path" Display="always" Required="true" Mask="false"/>
-  <Config Name="Config Directory" Target="/config" Default="/mnt/user/appdata/ucg-config-backup/config" Mode="rw" Description="The container's own state (crontab)" Type="Path" Display="advanced" Required="true" Mask="false"/>
   <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="User that owns the backups (nobody)" Type="Variable" Display="always" Required="true" Mask="false"/>
   <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="Group for the backups (users)" Type="Variable" Display="always" Required="true" Mask="false"/>
   <Config Name="UMASK" Target="UMASK" Default="002" Mode="" Description="002: new files are writable for the users group, e.g. over SMB" Type="Variable" Display="advanced" Required="false" Mask="false"/>
