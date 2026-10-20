@@ -13,7 +13,7 @@ body:
     attributes:
       label: Version
       description: The image tag, or the `version` field of a webhook payload.
-      placeholder: "2.0.0"
+      placeholder: "2.2.0"
     validations:
       required: true
   - type: input

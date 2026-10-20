@@ -18,7 +18,10 @@ This tool holds the login of a network console and downloads its full
 configuration, so the following are of particular interest:
 
 - `UCG_PASSWORD` or the webhook URL (its path is usually a secret) ending up
-  in logs, the webhook payload, the image or on disk
+  in logs, the webhook payload, the image or `/backups`. s6-overlay keeps
+  the container environment in `/run/s6/container_environment` inside the
+  container, as in every linuxserver.io image; that copy is known and
+  readable only from inside the container or by root on the Docker host.
 - backup files readable by users they shouldn't be readable by
 - path handling that could write or delete outside `/backups`
 

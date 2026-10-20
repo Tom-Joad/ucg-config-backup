@@ -34,12 +34,13 @@ class FakeResponse:
 class FakeSession:
     """Stands in for the console: login, cmd/backup, download, logout."""
 
-    def __init__(self, backup_status=200):
+    def __init__(self, backup_status=200, download_type="application/octet-stream"):
         self.headers = {}
         self.cookies = {}
         self.verify = None
         self.calls = []
         self.backup_status = backup_status
+        self.download_type = download_type
 
     def post(self, url, **kwargs):
         self.calls.append(("POST", url))
@@ -54,7 +55,7 @@ class FakeSession:
 
     def get(self, url, **kwargs):
         self.calls.append(("GET", url))
-        return FakeResponse(content=b"unf-data")
+        return FakeResponse(headers={"content-type": self.download_type}, content=b"unf-data")
 
 
 @pytest.fixture
@@ -179,6 +180,46 @@ def test_main_saves_backup_and_applies_retention(settings, monkeypatch):
 
 
 def test_main_explains_403_on_backup_command(settings, monkeypatch):
-    monkeypatch.setattr(requests, "Session", lambda: FakeSession(backup_status=403))
+    session = FakeSession(backup_status=403)
+    monkeypatch.setattr(requests, "Session", lambda: session)
     with pytest.raises(RuntimeError, match="403"):
         backup.main(new_run())
+    # A failed run still logs out.
+    assert ("POST", "https://192.0.2.1/api/auth/logout") in session.calls
+
+
+def test_main_rejects_negative_retention(monkeypatch):
+    monkeypatch.setenv("RETENTION_DAYS", "-5")
+    out = subprocess.run(
+        [sys.executable, "-c", "import backup; print(backup.RETENTION_DAYS)"],
+        capture_output=True, text=True, check=True, cwd=os.path.dirname(backup.__file__),
+    )
+    assert out.stdout.strip() == "None"
+
+
+def test_main_rejects_an_html_page_as_backup(settings, monkeypatch):
+    monkeypatch.setattr(requests, "Session", lambda: FakeSession(download_type="text/html; charset=utf-8"))
+    with pytest.raises(RuntimeError, match="text/html"):
+        backup.main(new_run())
+    assert not list(settings.glob("ucg-backup-*"))
+
+
+def test_retention_removes_stale_partials_and_logs_freed_space(settings, capsys):
+    long_ago = time.time() - 40 * 86400
+    stale = settings / ".ucg-backup-20200101-000000.unf.partial"
+    stale.write_bytes(b"half")
+    os.utime(stale, (long_ago, long_ago))
+    fresh = settings / ".ucg-backup-20990101-000000.unf.partial"
+    fresh.write_bytes(b"in progress")
+    old = settings / "ucg-backup-20200101-000000.unf"
+    old.write_bytes(b"12345")
+    os.utime(old, (long_ago, long_ago))
+
+    run = new_run()
+    backup.apply_retention(run)
+
+    assert not stale.exists()
+    assert fresh.exists()
+    assert not old.exists()
+    assert run["backups_kept"] == 0
+    assert "freed 5 bytes" in capsys.readouterr().out

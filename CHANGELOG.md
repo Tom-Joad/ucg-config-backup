@@ -5,6 +5,35 @@ All notable changes to this project are listed here. Versions follow
 upgrading (a renamed or removed setting, a different folder layout, a changed
 webhook payload) only comes with a new major version.
 
+## [2.2.0] - 2026-10-20
+
+### Changed
+- The `/config` volume is gone: the container keeps no state, and its
+  crontab is rebuilt from `CRON_SCHEDULE` at every start. An existing
+  `/config` mapping does no harm; remove it (Unraid: *Config Directory*)
+  and delete the folder when you like.
+- `docker-compose.yml` reads the console login and the webhook URL from a
+  `.env` file (see `.env.example`) instead of holding them inline.
+
+### Fixed
+- A download that is a web page or an error message instead of a backup
+  fails the run, instead of being saved as a `.unf` and reported as `ok`.
+- The run logs out of the console also when a step failed, so no session
+  stays open.
+- A negative `RETENTION_DAYS` fails the run with an `ERROR:`, like any other
+  invalid value; it used to be treated as "keep everything".
+- A `.partial` file left by a run that was killed half-way is removed after
+  an hour.
+- The retention log line also names the space freed.
+
+### Docs
+- The security notes no longer claim the password never reaches a file:
+  s6-overlay keeps the container environment in
+  `/run/s6/container_environment`, as in every linuxserver.io image.
+- New `unraid/README-UNRAID.md` (Community Applications, manual template,
+  updating); the README has an upgrade section, the test commands and
+  links to the changelog and security policy.
+
 ## [2.1.4] - 2026-10-19
 
 ### Fixed
@@ -99,3 +128,12 @@ webhook payload) only comes with a new major version.
 
 Initial release: local-API backup flow, cron scheduling, retention, webhook
 notifications, multi-arch image, Unraid and Synology documentation.
+
+[2.2.0]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.1.4...v2.2.0
+[2.1.4]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.1.3...v2.1.4
+[2.1.3]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.1.2...v2.1.3
+[2.1.2]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.1.1...v2.1.2
+[2.1.1]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.1.0...v2.1.1
+[2.1.0]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.0.0...v2.1.0
+[2.0.0]: https://github.com/Tom-Joad/ucg-config-backup/compare/v1.1.0...v2.0.0
+[1.1.0]: https://github.com/Tom-Joad/ucg-config-backup/releases/tag/v1.1.0

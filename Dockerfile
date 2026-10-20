@@ -38,9 +38,8 @@ RUN chmod +x /usr/local/bin/backup.py /usr/local/bin/ucg-backup \
  && chmod +x /etc/s6-overlay/s6-rc.d/init-ucg-config/run /etc/s6-overlay/s6-rc.d/svc-ucg-initial/run \
  && printf 'ucg-config-backup version: %s\n' "$(python3 /usr/local/bin/backup.py --version)" > /build_version
 
-# Crontab and the container's own state.
-VOLUME /config
-# Backups are written here, owned by PUID:PGID.
+# Backups are written here, owned by PUID:PGID. There is no /config volume:
+# the container keeps no state, its crontab is rebuilt at every start.
 VOLUME /backups
 
 # The base image runs cron as `busybox crond`, so the process name is

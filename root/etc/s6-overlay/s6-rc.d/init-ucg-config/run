@@ -23,26 +23,24 @@ fi
 
 BACKUP_DIR="${LOCAL_BACKUP_DIR:-/backups}"
 
-mkdir -p /config/crontabs "${BACKUP_DIR}"
+mkdir -p "${BACKUP_DIR}"
 
-if [[ -z ${LSIO_NON_ROOT_USER} ]]; then
-    # Not recursive: a large backup folder would make every start slow.
-    lsiown abc:abc /config
-    # A folder Docker created itself (missing host path, fresh volume) belongs
-    # to root and abc couldn't write the backups. One that already belongs to
-    # someone else is left as it is.
-    if [[ $(stat -c %u "${BACKUP_DIR}") == 0 ]]; then
-        lsiown abc:abc "${BACKUP_DIR}"
-    fi
+# A folder Docker created itself (missing host path, fresh volume) belongs
+# to root and abc couldn't write the backups. One that already belongs to
+# someone else is left as it is. Not recursive: a large backup folder would
+# make every start slow.
+if [[ -z ${LSIO_NON_ROOT_USER} ]] && [[ $(stat -c %u "${BACKUP_DIR}") == 0 ]]; then
+    lsiown abc:abc "${BACKUP_DIR}"
 fi
 
 # The job runs from root's crontab so its output reaches the container log
 # (/proc/1/fd is root-only); the wrapper drops to abc before running Python.
-# The base image's own entries stay.
+# The base image's own entries stay. The crontab is rebuilt at every start,
+# so it needs no volume; this step runs after the base image's
+# init-crontab-config, which would otherwise reinstall its own.
 {
     cat /usr/local/share/ucg-config-backup/crontab.root
     echo "${CRON_SCHEDULE} /usr/local/bin/ucg-backup >> /proc/1/fd/1 2>> /proc/1/fd/2"
-} > /config/crontabs/root
-crontab -u root /config/crontabs/root
+} | crontab -u root -
 
 echo "Scheduled backup: '${CRON_SCHEDULE}' (container timezone: $(date +%Z))"
