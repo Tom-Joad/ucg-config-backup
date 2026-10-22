@@ -5,7 +5,7 @@ All notable changes to this project are listed here. Versions follow
 upgrading (a renamed or removed setting, a different folder layout, a changed
 webhook payload) only comes with a new major version.
 
-## [Unreleased]
+## [2.2.1] - 2026-10-22
 
 ### Changed
 - The build upgrades the Alpine packages before installing anything, so
@@ -13,6 +13,10 @@ webhook payload) only comes with a new major version.
   image. Before, packages the base image ships (such as musl, brotli,
   c-ares and ca-certificates) stayed at its state until the next base
   image update.
+
+### Security
+- Security updates of the distribution packages, picked up by rebuilding the image:
+  - `musl` 1.2.6-r3 (CVE-2026-107891)
 
 ## [2.2.0] - 2026-10-20
 
@@ -138,6 +142,7 @@ webhook payload) only comes with a new major version.
 Initial release: local-API backup flow, cron scheduling, retention, webhook
 notifications, multi-arch image, Unraid and Synology documentation.
 
+[2.2.1]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.1.4...v2.2.0
 [2.1.4]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.1.3...v2.1.4
 [2.1.3]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.1.2...v2.1.3
