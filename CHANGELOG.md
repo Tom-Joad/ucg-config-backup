@@ -5,6 +5,15 @@ All notable changes to this project are listed here. Versions follow
 upgrading (a renamed or removed setting, a different folder layout, a changed
 webhook payload) only comes with a new major version.
 
+## [Unreleased]
+
+### Changed
+- The build upgrades the Alpine packages before installing anything, so
+  every image has the current fixes, not only those of the pinned base
+  image. Before, packages the base image ships (such as musl, brotli,
+  c-ares and ca-certificates) stayed at its state until the next base
+  image update.
+
 ## [2.2.0] - 2026-10-20
 
 ### Changed

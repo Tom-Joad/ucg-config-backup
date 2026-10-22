@@ -20,8 +20,10 @@ COPY requirements.txt /tmp/requirements.txt
 # /lsiopy is linuxserver.io's place for a Python venv and already on PATH.
 # pip is only needed to build the image. It is removed afterwards: that drops
 # its CVE surface (e.g. CVE-2025-8869) and anything an attacker could use to
-# pull code into a running container.
-RUN apk add --no-cache python3 \
+# pull code into a running container. The upgrade picks up Alpine fixes newer
+# than the pinned base image.
+RUN apk upgrade --no-cache \
+ && apk add --no-cache python3 \
  && python3 -m venv /lsiopy \
  && /lsiopy/bin/pip install --no-cache-dir --requirement /tmp/requirements.txt \
  && /lsiopy/bin/pip uninstall --yes pip \
