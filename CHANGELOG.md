@@ -5,6 +5,12 @@ All notable changes to this project are listed here. Versions follow
 upgrading (a renamed or removed setting, a different folder layout, a changed
 webhook payload) only comes with a new major version.
 
+## [2.2.2] - 2026-10-24
+
+### Changed
+- Updated dependencies:
+  - linuxserver/baseimage-alpine from `b661ece` to `7a59ee7`
+
 ## [2.2.1] - 2026-10-22
 
 ### Changed
@@ -142,6 +148,7 @@ webhook payload) only comes with a new major version.
 Initial release: local-API backup flow, cron scheduling, retention, webhook
 notifications, multi-arch image, Unraid and Synology documentation.
 
+[2.2.2]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.2.1...v2.2.2
 [2.2.1]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.1.4...v2.2.0
 [2.1.4]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.1.3...v2.1.4
