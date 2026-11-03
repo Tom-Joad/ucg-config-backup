@@ -5,6 +5,12 @@ All notable changes to this project are listed here. Versions follow
 upgrading (a renamed or removed setting, a different folder layout, a changed
 webhook payload) only comes with a new major version.
 
+## [2.2.6] - 2026-11-03
+
+### Security
+- Security updates of the distribution packages, picked up by rebuilding the image:
+  - `libexpat` 2.10.0-r0 (CVE-2026-117610, CVE-2026-118370)
+
 ## [2.2.5] - 2026-10-28
 
 ### Security
@@ -167,6 +173,7 @@ webhook payload) only comes with a new major version.
 Initial release: local-API backup flow, cron scheduling, retention, webhook
 notifications, multi-arch image, Unraid and Synology documentation.
 
+[2.2.6]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.2.5...v2.2.6
 [2.2.5]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.2.4...v2.2.5
 [2.2.4]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.2.3...v2.2.4
 [2.2.3]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.2.2...v2.2.3
