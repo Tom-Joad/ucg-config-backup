@@ -1,7 +1,7 @@
 # linuxserver.io's Alpine 3.24 base: s6-overlay, PUID/PGID/UMASK/TZ, the abc
 # user, cron and docker mods, as in every linuxserver.io container.
 # Pinned by digest (a multi-arch index); Dependabot proposes new digests.
-FROM ghcr.io/linuxserver/baseimage-alpine:3.24@sha256:7a59ee77c18e91c5d76539634118b7f8f7b5be470a8c6f11774063036857a8c8
+FROM ghcr.io/linuxserver/baseimage-alpine:3.24@sha256:52106d187a66ccb92e3289cb6dd25c549cb0b6b7bfec38a51994434c96db2d35
 
 # image.source makes a GHCR package inherit the repository's visibility.
 LABEL org.opencontainers.image.source="https://github.com/Tom-Joad/ucg-config-backup" \
