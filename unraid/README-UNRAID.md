@@ -31,15 +31,19 @@ All under **Show more settings**:
 
 | Setting | Why |
 | --- | --- |
-| `TZ` | The schedule runs in this time zone |
 | `CRON_SCHEDULE` | When the backup runs, default daily at 03:00 |
 | `RETENTION_DAYS` | How long backups are kept, default 30 days |
 | `WEBHOOK_URL`, `WEBHOOK_FORMAT`, `NOTIFY_ON_SUCCESS` | Notifications, e.g. to Home Assistant (`json`) or ntfy.sh (`text`) |
 
 ## Updating
 
-**Docker** tab → **Check for Updates** → **apply update**. The template
-carries its `TemplateURL`, so Unraid picks up new or changed fields.
+**Docker** tab → **Check for Updates** → **apply update**. Unraid doesn't
+update the template of an installed container: a setting added in a later
+version needs **Edit** → **Add another Path, Port, Variable, Label or
+Device**.
+
+The schedule runs in the server's time zone: Unraid sets `TZ` from its own time zone (**Settings** → **Date and Time**) for every
+container, so the template has no field for it.
 
 **Coming from 2.1.x:** the *Config Directory* (`/config`) is no longer
 used. Edit the container, remove that path, and delete
