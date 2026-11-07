@@ -5,6 +5,12 @@ All notable changes to this project are listed here. Versions follow
 upgrading (a renamed or removed setting, a different folder layout, a changed
 webhook payload) only comes with a new major version.
 
+## [Unreleased]
+
+### Changed
+- The base image moves to digest `d07ad0e` (Alpine 3.24.4, `apk-tools` 3.0.9,
+  `tzdata` 2026f).
+
 ## [2.2.6] - 2026-11-03
 
 ### Security
