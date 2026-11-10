@@ -353,7 +353,8 @@ belongs to someone else is left alone.
   Management** rights on the Network application, not "Limited Admin" or
   "View Only". Raise its role under **Admins & Users**. Less commonly it's
   a rotating CSRF token between login and the backup call — the script
-  automatically adopts an `x-updated-csrf-token` from UniFi OS if present.
+  automatically adopts an `x-updated-csrf-token` from UniFi OS if present, and
+  a `403` is retried once after a fresh login before the run fails.
 * **`Unexpected backup response, no download URL`** — the API response
   shape can differ slightly between firmware versions; check the full log
   (`docker logs ucg-config-backup`) and verify `UCG_SITE` (the site name
