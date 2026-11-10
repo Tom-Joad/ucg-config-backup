@@ -85,7 +85,9 @@ correct image for your architecture.
 | \<version\> | yes | A specific release, e.g. `2.2.0`, or `2.2` for the latest patch of a minor |
 | \<sha\> | yes | Immutable build of a specific commit |
 
-Images are built from `v*` tags and, rarely, by a manual run of the maintainer's build workflow on `main`. A manual run also moves `latest` and publishes a `sha-…` tag, so it can contain commits that aren't released yet while `backup.py` still reports the previous version. They are signed with cosign (releases after 2.0.0 need a cosign 3.x client to
+Images are built from `v*` tags and, rarely, by a manual run of the build
+workflow on `main`. A manual run also moves `latest` and publishes a `sha-…`
+tag, so it can contain commits that aren't released yet. Images are signed with cosign (releases after 2.0.0 need a cosign 3.x client to
 verify; 2.0.0 and older also verify with 2.x). To verify one:
 
 ```bash
