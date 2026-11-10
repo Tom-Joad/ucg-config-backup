@@ -21,6 +21,34 @@ webhook payload) only comes with a new major version.
 - The README says that images are built from version tags and, rarely, by a
   manual run that also moves `latest`.
 - The bug report form asks for the `starting` line at the top of the log.
+### Fixed
+- A problem while cleaning up old backups (a file removed in between, a share
+  that refuses the delete) is now a `WARNING:` in the log. Before, it marked a
+  backup that had been saved as failed and sent a failure webhook. The success
+  webhook names the warnings.
+- An answer to the backup command that isn't what the script expects (an HTML
+  page from a proxy, a changed firmware answer) now gives the clear
+  `Unexpected backup response, no download URL: ...` error with a hint to check
+  `UCG_SITE`, instead of a raw JSON or key error.
+- A `403` from the backup command is retried once after logging in again
+  (fresh session and CSRF token) before the run fails.
+- `CRON_SCHEDULE` is checked field by field: a value out of range (`61 25 * * *`),
+  letters (`a b c d e`) or a line break stops the container with an `ERROR:`
+  line. Before, crond never ran such a job and the container looked healthy.
+- The start-up check now also covers `VERIFY_SSL`, `NOTIFY_ON_SUCCESS`,
+  `RUN_ON_START` (`true` or `false` in any case; `yes` or `1` used to mean
+  `false` without a word), `RETENTION_DAYS`, `WEBHOOK_FORMAT`, `WEBHOOK_URL`
+  (must start with `http://` or `https://`) and `UCG_HOST` (a host name or IP
+  address with an optional `:port`, no `https://` and no path). A bad value
+  stops the container with an `ERROR:` line naming the setting. `docker exec`
+  runs read the booleans the same way.
+- A crontab that can't be installed now stops the container instead of
+  starting it without a backup job.
+- The `ucg-backup` wrapper gives the backup a `HOME` it can read, and runs
+  Python directly when it isn't root. The container refuses to start with
+  `LSIO_NON_ROOT_USER`, which never worked.
+- A `WEBHOOK_URL` that can never work (no `http://`) is reported once, not
+  retried for seven seconds.
 
 ## [2.2.7] - 2026-11-07
 
