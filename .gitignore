@@ -4,3 +4,6 @@ config/
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# Claude Code's local settings: approved commands can hold tokens
+.claude/settings.local.json
