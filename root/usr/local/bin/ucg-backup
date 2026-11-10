@@ -15,4 +15,13 @@ if ! flock -n 9; then
     exit 0
 fi
 
+# Without root there is nobody to drop privileges from (and s6-setuidgid
+# would fail): run as the current user.
+if [[ -n ${LSIO_NON_ROOT_USER:-} ]] || [[ $(id -u) != 0 ]]; then
+    exec python3 /usr/local/bin/backup.py "$@"
+fi
+
+# s6-setuidgid keeps root's HOME=/root, which abc can't read. There is no
+# /config here; /tmp is always writable.
+export HOME=/tmp
 exec s6-setuidgid abc python3 /usr/local/bin/backup.py "$@"

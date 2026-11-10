@@ -318,3 +318,53 @@ def test_success_message_mentions_retention_warnings():
     run = new_run() | {"filename": "f.unf", "retention_warnings": 2}
     assert backup.success_message(run) == "f.unf (retention had 2 warning(s), see the log)"
     assert backup.success_message(new_run() | {"filename": "f.unf"}) == "f.unf"
+@pytest.mark.parametrize("value,expected", [
+    ("true", True), ("TRUE", True), (" True ", True), ("false", False), ("False", False),
+    ("", False), ("yes", None), ("1", None), ("on", None),
+])
+def test_read_bool_accepts_only_true_and_false(monkeypatch, value, expected):
+    monkeypatch.setenv("SOME_FLAG", value)
+    assert backup.read_bool("SOME_FLAG", "false") is expected
+
+
+def test_read_bool_uses_the_default_when_unset(monkeypatch):
+    monkeypatch.delenv("SOME_FLAG", raising=False)
+    assert backup.read_bool("SOME_FLAG", "true") is True
+
+
+@pytest.mark.parametrize("name", ["VERIFY_SSL", "NOTIFY_ON_SUCCESS"])
+def test_main_rejects_a_boolean_that_is_not_true_or_false(settings, monkeypatch, name):
+    monkeypatch.setattr(backup, name, None)
+    with pytest.raises(RuntimeError, match=f"{name} must be 'true' or 'false'"):
+        backup.main(new_run())
+
+
+@pytest.mark.parametrize("host", ["https://192.0.2.1", "192.0.2.1/", "192.0.2.1/path"])
+def test_main_rejects_a_host_with_scheme_or_path(settings, monkeypatch, host):
+    monkeypatch.setattr(backup, "HOST", host)
+    monkeypatch.setenv("UCG_HOST", host)
+    with pytest.raises(RuntimeError, match="UCG_HOST must be a host name"):
+        backup.main(new_run())
+
+
+@pytest.mark.parametrize("error", [
+    requests.exceptions.MissingSchema, requests.exceptions.InvalidSchema, requests.exceptions.InvalidURL,
+])
+def test_notify_does_not_retry_an_invalid_url(monkeypatch, capsys, error):
+    calls = []
+    sleeps = []
+
+    def post(*args, **kwargs):
+        calls.append(1)
+        raise error("Invalid URL 'homeassistant.local:8123/api/webhook/secret'")
+
+    monkeypatch.setattr(backup, "WEBHOOK_URL", "homeassistant.local:8123/api/webhook/secret")
+    monkeypatch.setattr(backup, "WEBHOOK_FORMAT", "text")
+    monkeypatch.setattr(requests, "post", post)
+    monkeypatch.setattr(time, "sleep", sleeps.append)
+    backup.notify(False, "x", new_run())
+    out = capsys.readouterr().out
+    assert len(calls) == 1
+    assert sleeps == []
+    assert f"webhook URL is not valid ({error.__name__})" in out
+    assert "secret" not in out
