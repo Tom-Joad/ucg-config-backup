@@ -292,7 +292,7 @@ def test_a_retention_error_does_not_fail_the_run(settings, monkeypatch, capsys):
     run = new_run()
     backup.main(run)
     out = capsys.readouterr().out
-    assert "WARNING: retention could not remove ucg-backup-20200101-000000.unf: read-only share" in out
+    assert "WARNING: could not remove ucg-backup-20200101-000000.unf: read-only share" in out
     assert "ERROR" not in out
     assert "Backup completed successfully." in out
     assert run["filename"] and run["retention_warnings"] == 1

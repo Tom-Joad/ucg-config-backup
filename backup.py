@@ -161,7 +161,7 @@ def main(run):
     try:
         apply_retention(run)
     except OSError as exc:  # e.g. the folder can't be listed
-        run["retention_warnings"] = run.get("retention_warnings", 0) + 1
+        run["retention_warnings"] = run.get("retention_warnings", 0) + 1  # the listing itself failed
         log(f"WARNING: retention failed: {exc}")
     log("Backup completed successfully.")
 
@@ -205,7 +205,7 @@ def backup_download_path(resp):
         payload = resp.json()
         data = payload["data"]
         return data[0]["url"]
-    except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+    except (ValueError, LookupError, TypeError):
         raise RuntimeError(
             f"Unexpected backup response, no download URL: {resp.text[:500]} "
             "-- check that UCG_SITE is the right site name."
@@ -220,7 +220,6 @@ def save_backup(session, run):
         # once, with a fresh session and token, before giving up.
         log("Backup command rejected (403), logging in again and retrying once...")
         session.cookies.clear()
-        session.headers.pop("X-CSRF-Token", None)
         login(session)
         resp = request_backup(session)
     if resp.status_code == 403:
@@ -264,42 +263,37 @@ def save_backup(session, run):
     log(f"Saved {target} ({len(dl.content)} bytes).")
 
 
-def apply_retention(run):
+def expire(f, cutoff, run):
+    # Deletes f when it is older than cutoff and returns its size, else None.
     # The backup is already saved: a file that can't be inspected or removed
     # (gone in between, read-only share) is a warning, not a failed run.
+    try:
+        st = f.stat()
+        if st.st_mtime < cutoff:
+            f.unlink()
+            return st.st_size
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        run["retention_warnings"] += 1
+        log(f"WARNING: could not remove {f.name}: {exc}")
+    return None
+
+
+def apply_retention(run):
     now = time.time()
-    warnings = 0
+    run["retention_warnings"] = 0
     for f in BACKUP_DIR.glob(".ucg-backup-*.unf.partial"):
-        try:
-            if f.stat().st_mtime < now - PARTIAL_MAX_AGE_S:
-                f.unlink()
-                log(f"Removed {f.name} left behind by an interrupted run.")
-        except FileNotFoundError:
-            pass
-        except OSError as exc:
-            warnings += 1
-            log(f"WARNING: could not remove {f.name}: {exc}")
+        if expire(f, now - PARTIAL_MAX_AGE_S, run) is not None:
+            log(f"Removed {f.name} left behind by an interrupted run.")
 
     if RETENTION_DAYS > 0:
         cutoff = now - RETENTION_DAYS * 86400
-        removed = 0
-        freed = 0
-        for f in BACKUP_DIR.glob("ucg-backup-*.unf"):
-            try:
-                st = f.stat()
-                if st.st_mtime < cutoff:
-                    f.unlink()
-                    removed += 1
-                    freed += st.st_size
-            except FileNotFoundError:
-                pass
-            except OSError as exc:
-                warnings += 1
-                log(f"WARNING: retention could not remove {f.name}: {exc}")
-        if removed:
-            log(f"Retention: removed {removed} backup(s) older than {RETENTION_DAYS} days, freed {freed} bytes.")
+        sizes = [expire(f, cutoff, run) for f in BACKUP_DIR.glob("ucg-backup-*.unf")]
+        sizes = [size for size in sizes if size is not None]
+        if sizes:
+            log(f"Retention: removed {len(sizes)} backup(s) older than {RETENTION_DAYS} days, freed {sum(sizes)} bytes.")
     run["backups_kept"] = sum(1 for _ in BACKUP_DIR.glob("ucg-backup-*.unf"))
-    run["retention_warnings"] = warnings
 
 
 def success_message(run):
