@@ -5,6 +5,20 @@ All notable changes to this project are listed here. Versions follow
 upgrading (a renamed or removed setting, a different folder layout, a changed
 webhook payload) only comes with a new major version.
 
+## [Unreleased]
+
+### Fixed
+- A problem while cleaning up old backups (a file removed in between, a share
+  that refuses the delete) is now a `WARNING:` in the log. Before, it marked a
+  backup that had been saved as failed and sent a failure webhook. The success
+  webhook names the warnings.
+- An answer to the backup command that isn't what the script expects (an HTML
+  page from a proxy, a changed firmware answer) now gives the clear
+  `Unexpected backup response, no download URL: ...` error with a hint to check
+  `UCG_SITE`, instead of a raw JSON or key error.
+- A `403` from the backup command is retried once after logging in again
+  (fresh session and CSRF token) before the run fails.
+
 ## [2.2.7] - 2026-11-07
 
 ### Changed
