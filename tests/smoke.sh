@@ -85,12 +85,12 @@ crontab=$(docker exec "$NAME" crontab -l -u root)
 grep -qF '5 2 * * * /usr/local/bin/ucg-backup' <<<"$crontab" || fail "schedule not installed without volumes"
 docker rm -f "$NAME" >/dev/null
 
-wait_for_init() {
+wait_for_log() { # pattern
     for _ in $(seq 1 30); do
-        in_log '\[ls\.io-init\] done' && return 0
+        in_log "$1" && return 0
         sleep 1
     done
-    fail "the init steps did not finish"
+    fail "no log line matching '$1'"
 }
 
 # Docker creates a missing host folder as root. The test makes one the same
@@ -101,7 +101,7 @@ docker run --rm --entrypoint sh -v "$WORK:/w" "$IMAGE" -c 'mkdir /w/rootdir && c
 [[ $(stat -c %u "$WORK/rootdir") == 0 ]] || fail "the test folder is not root-owned"
 docker run -d --name "$NAME" -e PUID="$PUID" -e PGID="$PGID" -e UCG_HOST=x -e UCG_USERNAME=x -e UCG_PASSWORD=x \
     -e RUN_ON_START=false -v "$WORK/rootdir:/backups" "$IMAGE" >/dev/null
-wait_for_init
+wait_for_log '\[ls\.io-init\] done'
 [[ $(stat -c %u "$WORK/rootdir") == "$PUID" ]] || fail "a root-owned /backups was not handed to PUID"
 docker rm -f "$NAME" >/dev/null
 
@@ -109,7 +109,7 @@ echo "== a backup folder of another user is left alone"
 docker run --rm --entrypoint sh -v "$WORK:/w" "$IMAGE" -c 'mkdir /w/otherdir && chown 4242:4242 /w/otherdir'
 docker run -d --name "$NAME" -e PUID="$PUID" -e PGID="$PGID" -e UCG_HOST=x -e UCG_USERNAME=x -e UCG_PASSWORD=x \
     -e RUN_ON_START=false -v "$WORK/otherdir:/backups" "$IMAGE" >/dev/null
-wait_for_init
+wait_for_log '\[ls\.io-init\] done'
 [[ $(stat -c %u "$WORK/otherdir") == 4242 ]] || fail "a /backups of another user was changed"
 docker rm -f "$NAME" >/dev/null
 
@@ -123,10 +123,7 @@ PY
 chmod 644 "$WORK/fake-backup.py"
 docker run -d --name "$NAME" -e PUID="$PUID" -e PGID="$PGID" -e UCG_HOST=x -e UCG_USERNAME=x -e UCG_PASSWORD=x \
     -e RUN_ON_START=TRUE -v "$WORK/fake-backup.py:/usr/local/bin/backup.py:ro" "$IMAGE" >/dev/null
-for _ in $(seq 1 30); do
-    in_log 'FAKE-RUN' && break
-    sleep 1
-done
+wait_for_log 'FAKE-RUN'
 in_log "FAKE-RUN uid=$PUID home=/tmp" || fail "the wrapper did not run Python as PUID with HOME=/tmp"
 docker rm -f "$NAME" >/dev/null
 

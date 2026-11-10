@@ -162,7 +162,7 @@ def main(run):
     ]
     if bad_bools:
         raise RuntimeError(f"{' and '.join(bad_bools)} must be 'true' or 'false'")
-    if "://" in HOST or "/" in HOST:
+    if "/" in HOST:  # also covers a leading https://
         raise RuntimeError("UCG_HOST must be a host name or IP address (optionally with :port), without https:// or a path")
     if RETENTION_DAYS is None:
         raise RuntimeError(
