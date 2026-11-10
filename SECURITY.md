@@ -30,7 +30,7 @@ inbound ports.
 
 ## Supply chain
 
-Images are built by GitHub Actions from version tags only. Third-party
+Images are built by GitHub Actions from version tags and, rarely, by a manual run of the maintainer. Third-party
 actions are pinned to commit SHAs. Dependencies are checked with `pip-audit`,
 and the repository is scanned with `gitleaks`. Images are scanned with Trivy
 and signed keylessly with cosign. To verify an image (needs cosign 3.x for

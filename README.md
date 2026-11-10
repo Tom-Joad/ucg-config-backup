@@ -81,11 +81,11 @@ correct image for your architecture.
 
 | Tag | Available | Description |
 | :----: | :----: | --- |
-| latest | yes | Latest release |
+| latest | yes | The latest release, or the latest manual build (see below) |
 | \<version\> | yes | A specific release, e.g. `2.2.0`, or `2.2` for the latest patch of a minor |
 | \<sha\> | yes | Immutable build of a specific commit |
 
-Images are only built from `v*` tags. They are signed with cosign (releases after 2.0.0 need a cosign 3.x client to
+Images are built from `v*` tags and, rarely, by a manual run of the maintainer's build workflow on `main`. A manual run also moves `latest` and publishes a `sha-…` tag, so it can contain commits that aren't released yet while `backup.py` still reports the previous version. They are signed with cosign (releases after 2.0.0 need a cosign 3.x client to
 verify; 2.0.0 and older also verify with 2.x). To verify one:
 
 ```bash
@@ -100,9 +100,10 @@ cosign verify ghcr.io/tom-joad/ucg-config-backup:latest \
 
 This repository ships a [`docker-compose.yml`](docker-compose.yml) and an
 [`.env.example`](.env.example). Copy `.env.example` to `.env`, fill in the
-console login (and the webhook URL, if you use one), adjust the settings
-under `environment:`, then run `docker compose up -d`. `.env` keeps the
-password out of the compose file.
+console login (and the webhook URL, if you use one), uncomment and change
+any optional setting, then run `docker compose up -d`. `.env` keeps the
+password out of the compose file. Without a value, `PUID` and `PGID` are
+`1000`, `UMASK` is `022` and `TZ` is `Etc/UTC`.
 
 ```yaml
 services:
@@ -111,14 +112,12 @@ services:
     container_name: ucg-config-backup
     restart: unless-stopped
     env_file:
-      - .env            # UCG_HOST, UCG_USERNAME, UCG_PASSWORD, WEBHOOK_URL
+      - .env            # UCG_HOST, UCG_USERNAME, UCG_PASSWORD, WEBHOOK_URL, optional settings
     environment:
-      PUID: 1000
-      PGID: 1000
-      UMASK: "022"
-      CRON_SCHEDULE: "0 3 * * *"
-      RETENTION_DAYS: "30"
-      TZ: Europe/Berlin
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      UMASK: ${UMASK:-022}
+      TZ: ${TZ:-Etc/UTC}
     volumes:
       - /path/to/backups:/backups
     security_opt:
