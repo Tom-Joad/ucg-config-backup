@@ -5,6 +5,27 @@ All notable changes to this project are listed here. Versions follow
 upgrading (a renamed or removed setting, a different folder layout, a changed
 webhook payload) only comes with a new major version.
 
+## [Unreleased]
+
+### Fixed
+- `CRON_SCHEDULE` is checked field by field: a value out of range (`61 25 * * *`),
+  letters (`a b c d e`) or a line break stops the container with an `ERROR:`
+  line. Before, crond never ran such a job and the container looked healthy.
+- The start-up check now also covers `VERIFY_SSL`, `NOTIFY_ON_SUCCESS`,
+  `RUN_ON_START` (`true` or `false` in any case; `yes` or `1` used to mean
+  `false` without a word), `RETENTION_DAYS`, `WEBHOOK_FORMAT`, `WEBHOOK_URL`
+  (must start with `http://` or `https://`) and `UCG_HOST` (a host name or IP
+  address with an optional `:port`, no `https://` and no path). A bad value
+  stops the container with an `ERROR:` line naming the setting. `docker exec`
+  runs read the booleans the same way.
+- A crontab that can't be installed now stops the container instead of
+  starting it without a backup job.
+- The `ucg-backup` wrapper gives the backup a `HOME` it can read, and runs
+  Python directly when it isn't root. The container refuses to start with
+  `LSIO_NON_ROOT_USER`, which never worked.
+- A `WEBHOOK_URL` that can never work (no `http://`) is reported once, not
+  retried for seven seconds.
+
 ## [2.2.7] - 2026-11-07
 
 ### Changed

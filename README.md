@@ -198,23 +198,25 @@ as those above). The usual linuxserver.io parameters apply:
 | `-v /backups` | The downloaded `.unf` backup files |
 
 Don't use `--user` or `--init`; the image runs s6-overlay as PID 1 and
-drops to `PUID:PGID` itself.
+drops to `PUID:PGID` itself. `LSIO_NON_ROOT_USER` is not supported either:
+the schedule goes into root's crontab, so the container refuses to start
+with it set.
 
 ## Environment variables
 
 | Variable | Required | Default | Description |
 | --- | :----: | --- | --- |
-| `UCG_HOST` | yes | – | IP or hostname of the UCG Ultra |
+| `UCG_HOST` | yes | – | IP address or host name of the UCG Ultra, optionally with `:port`; no `https://` and no path |
 | `UCG_USERNAME` | yes | – | Local admin username (see [Prerequisites](#prerequisites-on-the-ucg-ultra)) |
 | `UCG_PASSWORD` | yes | – | Password for that account |
 | `UCG_SITE` | | `default` | UniFi site name |
-| `VERIFY_SSL` | | `false` | Verify the console's TLS certificate (UniFi OS ships a self-signed cert by default) |
-| `CRON_SCHEDULE` | | `0 3 * * *` | Cron expression for the backup run (five fields; anything else stops the container with an `ERROR:` line) |
-| `RETENTION_DAYS` | | `30` | Delete local backups older than N days (`0` = keep forever; anything but a whole number of 0 or more fails the run) |
-| `RUN_ON_START` | | `true` | Run a backup immediately when the container starts |
-| `NOTIFY_ON_SUCCESS` | | `false` | Also send a webhook on success, not just on failure |
-| `WEBHOOK_URL` | | – | URL to POST run notifications to (e.g. ntfy.sh, Healthchecks.io, Home Assistant) — treat it as a secret, see [Webhook notifications](#webhook-notifications) |
-| `WEBHOOK_FORMAT` | | `text` | `text` for a plain-text body, `json` for structured fields (Home Assistant) |
+| `VERIFY_SSL` | | `false` | `true` or `false` (any case; anything else stops the container): verify the console's TLS certificate (UniFi OS ships a self-signed cert by default) |
+| `CRON_SCHEDULE` | | `0 3 * * *` | Cron expression for the backup run (five fields, each inside its range, separated by spaces or tabs; anything else stops the container with an `ERROR:` line) |
+| `RETENTION_DAYS` | | `30` | Delete local backups older than N days (`0` = keep forever; anything but a whole number of 0 or more stops the container) |
+| `RUN_ON_START` | | `true` | `true` or `false`: run a backup immediately when the container starts |
+| `NOTIFY_ON_SUCCESS` | | `false` | `true` or `false`: also send a webhook on success, not just on failure |
+| `WEBHOOK_URL` | | – | URL to POST run notifications to (e.g. ntfy.sh, Healthchecks.io, Home Assistant) — must start with `http://` or `https://`; treat it as a secret, see [Webhook notifications](#webhook-notifications) |
+| `WEBHOOK_FORMAT` | | `text` | `text` for a plain-text body, `json` for structured fields (Home Assistant); anything else stops the container |
 | `PUID` / `PGID` | | `911` | User and group ID of the backup files, see [Parameters](#parameters) |
 | `UMASK` | | `022` | Umask of the backup files |
 | `TZ` | | `UTC` | Timezone for the schedule and log timestamps |
