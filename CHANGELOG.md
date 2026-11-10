@@ -7,6 +7,20 @@ webhook payload) only comes with a new major version.
 
 ## [Unreleased]
 
+### Changed
+- `docker-compose.yml` no longer sets Unraid's IDs and a Berlin time zone:
+  `PUID`, `PGID`, `UMASK` and `TZ` default to `1000`, `1000`, `022` and
+  `Etc/UTC` and can be set in `.env`. The optional settings moved from the
+  compose file into `.env.example`. If you use the compose file and relied on
+  the old values, add `PUID=99`, `PGID=100`, `UMASK=002` and `TZ=Europe/Berlin`
+  to your `.env`.
+- The Python dependencies of `requests` are pinned in `requirements.txt`, so
+  every build of a release installs the same versions.
+
+### Docs
+- The README says that images are built from version tags and, rarely, by a
+  manual run that also moves `latest`.
+- The bug report form asks for the `starting` line at the top of the log.
 ### Fixed
 - A problem while cleaning up old backups (a file removed in between, a share
   that refuses the delete) is now a `WARNING:` in the log. Before, it marked a

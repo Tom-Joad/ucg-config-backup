@@ -1,1 +1,12 @@
+# The whole dependency tree is pinned, so CI and the image install the same
+# versions and every update arrives as a Dependabot pull request.
+certifi==2026.10.23
+    # via requests
+charset-normalizer==3.5.2
+    # via requests
+idna==3.20
+    # via requests
 requests==2.34.2
+    # via -r requirements.txt (direct)
+urllib3==2.8.0
+    # via requests

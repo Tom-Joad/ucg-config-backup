@@ -34,8 +34,10 @@ body:
     attributes:
       label: Log lines
       description: |
-        `docker logs ucg-config-backup`, around the problem. Check them for
-        host names, user names or URLs you don't want to share first.
+        The `starting` line at the top of the log (version and settings) and
+        the lines around the problem, redacted. `docker logs ucg-config-backup`
+        shows them; check for host names, user names or URLs you don't want
+        to share first.
       render: text
   - type: textarea
     id: setup
