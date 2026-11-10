@@ -5,7 +5,7 @@ All notable changes to this project are listed here. Versions follow
 upgrading (a renamed or removed setting, a different folder layout, a changed
 webhook payload) only comes with a new major version.
 
-## [Unreleased]
+## [2.2.8] - 2026-11-10
 
 ### Changed
 - `docker-compose.yml` no longer sets Unraid's IDs and a Berlin time zone:
@@ -224,6 +224,7 @@ webhook payload) only comes with a new major version.
 Initial release: local-API backup flow, cron scheduling, retention, webhook
 notifications, multi-arch image, Unraid and Synology documentation.
 
+[2.2.8]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.2.7...v2.2.8
 [2.2.7]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.2.6...v2.2.7
 [2.2.6]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.2.5...v2.2.6
 [2.2.5]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.2.4...v2.2.5

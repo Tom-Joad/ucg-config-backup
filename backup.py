@@ -16,7 +16,7 @@ import urllib.parse
 import requests
 import urllib3
 
-VERSION = "2.2.7"
+VERSION = "2.2.8"
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
