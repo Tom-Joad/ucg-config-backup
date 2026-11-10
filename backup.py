@@ -29,7 +29,17 @@ HOST = os.environ.get("UCG_HOST", "")
 USERNAME = os.environ.get("UCG_USERNAME", "")
 PASSWORD = os.environ.get("UCG_PASSWORD", "")
 SITE = os.environ.get("UCG_SITE", "default")
-VERIFY_SSL = os.environ.get("VERIFY_SSL", "false").strip().lower() == "true"
+
+
+def read_bool(name, default):
+    # "true"/"false" in any case. Anything else is None, rejected in main():
+    # "yes" quietly meaning false would turn certificate checks off for
+    # someone who thought they had asked for them.
+    value = os.environ.get(name, "").strip().lower() or default
+    return {"true": True, "false": False}.get(value)
+
+
+VERIFY_SSL = read_bool("VERIFY_SSL", "false")
 BACKUP_DIR = pathlib.Path(os.environ.get("LOCAL_BACKUP_DIR", "/backups"))
 try:
     RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "30"))
@@ -39,12 +49,19 @@ if RETENTION_DAYS is not None and RETENTION_DAYS < 0:
     RETENTION_DAYS = None
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")
 WEBHOOK_FORMAT = os.environ.get("WEBHOOK_FORMAT", "text").strip().lower() or "text"
-NOTIFY_ON_SUCCESS = os.environ.get("NOTIFY_ON_SUCCESS", "false").strip().lower() == "true"
+NOTIFY_ON_SUCCESS = read_bool("NOTIFY_ON_SUCCESS", "false")
 
 # Seconds to wait before each webhook retry. Home Assistant is briefly
 # unreachable while it restarts, and the default 03:00 run can land in a
 # maintenance window -- retry a little, but never block the run for long.
 WEBHOOK_RETRY_DELAYS = (2, 5)
+
+# Mistakes in WEBHOOK_URL that no retry can fix.
+INVALID_URL_ERRORS = (
+    requests.exceptions.MissingSchema,
+    requests.exceptions.InvalidSchema,
+    requests.exceptions.InvalidURL,
+)
 
 # A run killed half-way (SIGKILL, a container stop) leaves its hidden
 # .partial file behind. Older ones than this can't belong to a running backup.
@@ -105,6 +122,10 @@ def notify(ok, message, run):
         # URL (and with it the secret) into its messages.
         try:
             resp = requests.post(WEBHOOK_URL, timeout=10, **body)
+        except INVALID_URL_ERRORS as exc:
+            # A URL without a scheme can never work; retrying only delays the run.
+            log(f"WARNING: webhook URL is not valid ({type(exc).__name__}), not retrying.")
+            return
         except Exception as exc:  # noqa: BLE001
             problem = type(exc).__name__
         else:
@@ -135,6 +156,14 @@ def main(run):
     missing = [name for name in ("UCG_HOST", "UCG_USERNAME", "UCG_PASSWORD") if not os.environ.get(name)]
     if missing:
         raise RuntimeError(f"Missing required setting(s): {', '.join(missing)}")
+    bad_bools = [
+        name for name, value in (("VERIFY_SSL", VERIFY_SSL), ("NOTIFY_ON_SUCCESS", NOTIFY_ON_SUCCESS))
+        if value is None
+    ]
+    if bad_bools:
+        raise RuntimeError(f"{' and '.join(bad_bools)} must be 'true' or 'false'")
+    if "://" in HOST or "/" in HOST:
+        raise RuntimeError("UCG_HOST must be a host name or IP address (optionally with :port), without https:// or a path")
     if RETENTION_DAYS is None:
         raise RuntimeError(
             f"RETENTION_DAYS must be a whole number of 0 or more, got '{os.environ['RETENTION_DAYS']}'"

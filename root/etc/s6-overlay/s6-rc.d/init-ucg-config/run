@@ -12,11 +12,120 @@ for name in UCG_HOST UCG_USERNAME UCG_PASSWORD; do
     fi
 done
 
+# The job runs from root's crontab (see below), which a non-root container
+# can't write.
+if [[ -n ${LSIO_NON_ROOT_USER:-} ]]; then
+    echo "ERROR: LSIO_NON_ROOT_USER is not supported: the schedule goes into root's crontab. Use PUID/PGID instead." >&2
+    exit 1
+fi
+
+# Value of a setting without surrounding blanks; empty means "not set".
+setting() {
+    local value=${!1:-}
+    value=${value#"${value%%[![:space:]]*}"}
+    value=${value%"${value##*[![:space:]]}"}
+    printf '%s' "${value}"
+}
+
+for name in VERIFY_SSL NOTIFY_ON_SUCCESS RUN_ON_START; do
+    value=$(setting "${name}")
+    if [[ -n ${value} && ${value,,} != true && ${value,,} != false ]]; then
+        echo "ERROR: ${name} must be 'true' or 'false', got '${value}'" >&2
+        failed=1
+    fi
+done
+
+value=$(setting RETENTION_DAYS)
+if [[ -n ${value} && ! ${value} =~ ^[0-9]+$ ]]; then
+    echo "ERROR: RETENTION_DAYS must be a whole number of 0 or more, got '${value}'" >&2
+    failed=1
+fi
+
+value=$(setting WEBHOOK_FORMAT)
+if [[ -n ${value} && ${value,,} != text && ${value,,} != json ]]; then
+    echo "ERROR: WEBHOOK_FORMAT must be 'text' or 'json', got '${value}'" >&2
+    failed=1
+fi
+
+# Never echo the URL back: its path is usually the secret.
+value=$(setting WEBHOOK_URL)
+if [[ -n ${value} && ! ${value} =~ ^https?://[^[:space:]/]+ ]]; then
+    echo "ERROR: WEBHOOK_URL must start with http:// or https://" >&2
+    failed=1
+fi
+
+# A host name, IPv4 or bracketed IPv6 address, optionally with :port. A value
+# copied from the browser (https://192.168.1.1/) would build https://https://...
+value=$(setting UCG_HOST)
+host_re='^([A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?|\[[0-9A-Fa-f:.]+\])(:([0-9]{1,5}))?$'
+if [[ -n ${value} ]] && { [[ ! ${value} =~ ${host_re} ]] || (( 10#${BASH_REMATCH[4]:-0} > 65535 )); }; then
+    echo "ERROR: UCG_HOST must be a host name or IP address, optionally with :port, without https:// or a path, got '${value}'" >&2
+    failed=1
+fi
+
+# One cron field: a list of items, each `*`, a number, a range or a name, with
+# an optional /step. Values are checked against the field's range, because
+# crond silently never runs a job whose field is out of range.
+# Usage: valid_cron_field FIELD MIN MAX [NAMES]  (NAMES: space-separated, first one = MIN)
+valid_cron_field() {
+    local field=$1 min=$2 max=$3 names=${4:-} item base step lo hi i
+    local -a parts names_arr
+    read -ra names_arr <<<"${names}"
+    to_number() { # prints the number for a number or name, fails otherwise
+        local v=${1,,}
+        if [[ ${v} =~ ^[0-9]{1,2}$ ]]; then
+            printf '%s' "$((10#${v}))"
+            return 0
+        fi
+        for i in "${!names_arr[@]}"; do
+            if [[ ${names_arr[i]} == "${v}" ]]; then
+                printf '%s' "$((min + i))"
+                return 0
+            fi
+        done
+        return 1
+    }
+    [[ -n ${field} && ${field} != *,,* && ${field} != ,* && ${field} != *, ]] || return 1
+    IFS=, read -ra parts <<<"${field}"
+    for item in "${parts[@]}"; do
+        base=${item%%/*}
+        if [[ ${item} == */* ]]; then
+            step=${item#*/}
+            [[ ${step} =~ ^[0-9]{1,2}$ ]] && (( 10#${step} >= 1 )) || return 1
+        fi
+        if [[ ${base} == '*' ]]; then
+            continue
+        fi
+        if [[ ${base} == *-* ]]; then
+            lo=$(to_number "${base%%-*}") || return 1
+            hi=$(to_number "${base#*-}") || return 1
+            (( lo <= hi )) || return 1
+        else
+            lo=$(to_number "${base}") || return 1
+            hi=${lo}
+        fi
+        (( lo >= min && hi <= max )) || return 1
+    done
+}
+
 CRON_SCHEDULE="${CRON_SCHEDULE:-0 3 * * *}"
-# Five fields of digits, names, *, /, comma and hyphen. Anything else would
+# Exactly five fields, separated by spaces or tabs only (a line break would
+# become a second crontab line), each inside its range. Anything else would
 # leave crond without a job and the container looking healthy.
-if [[ ! ${CRON_SCHEDULE} =~ ^[0-9A-Za-z*/,-]+([[:space:]]+[0-9A-Za-z*/,-]+){4}$ ]]; then
-    echo "ERROR: CRON_SCHEDULE must have five fields, e.g. '0 3 * * *', got '${CRON_SCHEDULE}'" >&2
+cron_re=$'^[0-9A-Za-z*/,-]+([ \t]+[0-9A-Za-z*/,-]+){4}$'
+cron_ok=0
+if [[ ${CRON_SCHEDULE} =~ ${cron_re} ]]; then
+    read -ra cron_fields <<<"${CRON_SCHEDULE}"
+    if valid_cron_field "${cron_fields[0]}" 0 59 \
+        && valid_cron_field "${cron_fields[1]}" 0 23 \
+        && valid_cron_field "${cron_fields[2]}" 1 31 \
+        && valid_cron_field "${cron_fields[3]}" 1 12 "jan feb mar apr may jun jul aug sep oct nov dec" \
+        && valid_cron_field "${cron_fields[4]}" 0 7 "sun mon tue wed thu fri sat"; then
+        cron_ok=1
+    fi
+fi
+if [[ ${cron_ok} == 0 ]]; then
+    echo "ERROR: CRON_SCHEDULE must have five valid fields (minute 0-59, hour 0-23, day 1-31, month 1-12, weekday 0-7), e.g. '0 3 * * *', got '${CRON_SCHEDULE//[$'\n\r']/ }'" >&2
     failed=1
 fi
 [[ ${failed} == 0 ]] || exit 1
@@ -29,7 +138,7 @@ mkdir -p "${BACKUP_DIR}"
 # to root and abc couldn't write the backups. One that already belongs to
 # someone else is left as it is. Not recursive: a large backup folder would
 # make every start slow.
-if [[ -z ${LSIO_NON_ROOT_USER} ]] && [[ $(stat -c %u "${BACKUP_DIR}") == 0 ]]; then
+if [[ $(stat -c %u "${BACKUP_DIR}") == 0 ]]; then
     lsiown abc:abc "${BACKUP_DIR}"
 fi
 
@@ -38,9 +147,14 @@ fi
 # The base image's own entries stay. The crontab is rebuilt at every start,
 # so it needs no volume; this step runs after the base image's
 # init-crontab-config, which would otherwise reinstall its own.
-{
-    cat /usr/local/share/ucg-config-backup/crontab.root
-    echo "${CRON_SCHEDULE} /usr/local/bin/ucg-backup >> /proc/1/fd/1 2>> /proc/1/fd/2"
-} | crontab -u root -
+if ! base_crontab=$(cat /usr/local/share/ucg-config-backup/crontab.root); then
+    echo "ERROR: could not read the base image's crontab" >&2
+    exit 1
+fi
+if ! printf '%s\n%s\n' "${base_crontab}" \
+    "${CRON_SCHEDULE} /usr/local/bin/ucg-backup >> /proc/1/fd/1 2>> /proc/1/fd/2" | crontab -u root -; then
+    echo "ERROR: could not install the schedule in root's crontab" >&2
+    exit 1
+fi
 
 echo "Scheduled backup: '${CRON_SCHEDULE}' (container timezone: $(date +%Z))"

@@ -47,11 +47,32 @@ wait_for_exit || fail "kept running without UCG_HOST"
 in_log 'ERROR: UCG_HOST is required' || fail "no message about UCG_HOST"
 docker rm -f "$NAME" >/dev/null
 
-echo "== a schedule that isn't five fields stops the container"
-docker run -d --name "$NAME" -e UCG_HOST=x -e UCG_USERNAME=x -e UCG_PASSWORD=x -e CRON_SCHEDULE='every day' "$IMAGE" >/dev/null
-wait_for_exit || fail "kept running with a broken CRON_SCHEDULE"
-in_log 'ERROR: CRON_SCHEDULE must have five fields' || fail "no ERROR about CRON_SCHEDULE"
-docker rm -f "$NAME" >/dev/null
+# A setting that must stop the container: name of the case, the expected
+# ERROR text, then the extra docker run arguments.
+expect_stop() {
+    local what=$1 expected=$2; shift 2
+    echo "== $what stops the container"
+    docker run -d --name "$NAME" -e UCG_HOST=x -e UCG_USERNAME=x -e UCG_PASSWORD=x "$@" "$IMAGE" >/dev/null
+    wait_for_exit || fail "kept running with $what"
+    in_log "$expected" || fail "no ERROR for $what"
+    # FORBIDDEN: text that must not appear in the log (a secret).
+    if [[ -n ${FORBIDDEN:-} ]] && in_log "$FORBIDDEN"; then fail "the log of $what shows ${FORBIDDEN}"; fi
+    docker rm -f "$NAME" >/dev/null
+}
+
+expect_stop "a schedule that isn't five fields" 'ERROR: CRON_SCHEDULE must have five' -e CRON_SCHEDULE='every day'
+expect_stop "an out-of-range schedule" 'ERROR: CRON_SCHEDULE must have five' -e CRON_SCHEDULE='61 25 * * *'
+expect_stop "a schedule of letters" 'ERROR: CRON_SCHEDULE must have five' -e CRON_SCHEDULE='a b c d e'
+expect_stop "a schedule with a line break" 'ERROR: CRON_SCHEDULE must have five' -e CRON_SCHEDULE=$'0 3 * * *\n0 4 * * *'
+expect_stop "VERIFY_SSL=yes" "ERROR: VERIFY_SSL must be 'true' or 'false'" -e VERIFY_SSL=yes
+expect_stop "NOTIFY_ON_SUCCESS=1" "ERROR: NOTIFY_ON_SUCCESS must be" -e NOTIFY_ON_SUCCESS=1
+expect_stop "RUN_ON_START=on" "ERROR: RUN_ON_START must be" -e RUN_ON_START=on
+expect_stop "RETENTION_DAYS=abc" 'ERROR: RETENTION_DAYS must be a whole number' -e RETENTION_DAYS=abc
+expect_stop "WEBHOOK_FORMAT=xml" "ERROR: WEBHOOK_FORMAT must be 'text' or 'json'" -e WEBHOOK_FORMAT=xml
+expect_stop "a UCG_HOST with a scheme" 'ERROR: UCG_HOST must be a host name' -e UCG_HOST=https://192.0.2.1/
+FORBIDDEN=smoke-secret expect_stop "a WEBHOOK_URL without a scheme" 'ERROR: WEBHOOK_URL must start with http' \
+    -e WEBHOOK_URL=homeassistant.local:8123/api/webhook/smoke-secret
+expect_stop "LSIO_NON_ROOT_USER" 'ERROR: LSIO_NON_ROOT_USER is not supported' -e LSIO_NON_ROOT_USER=true
 
 echo "== without any volume the schedule is installed"
 docker run -d --name "$NAME" -e UCG_HOST=x -e UCG_USERNAME=x -e UCG_PASSWORD=x \
@@ -62,6 +83,51 @@ for _ in $(seq 1 30); do
 done
 crontab=$(docker exec "$NAME" crontab -l -u root)
 grep -qF '5 2 * * * /usr/local/bin/ucg-backup' <<<"$crontab" || fail "schedule not installed without volumes"
+docker rm -f "$NAME" >/dev/null
+
+wait_for_init() {
+    for _ in $(seq 1 30); do
+        in_log '\[ls\.io-init\] done' && return 0
+        sleep 1
+    done
+    fail "the init steps did not finish"
+}
+
+# Docker creates a missing host folder as root. The test makes one the same
+# way, through a container: a folder the calling user creates already belongs
+# to PUID and would never reach the hand-over.
+echo "== a root-owned backup folder is handed to PUID"
+docker run --rm --entrypoint sh -v "$WORK:/w" "$IMAGE" -c 'mkdir /w/rootdir && chown 0:0 /w/rootdir'
+[[ $(stat -c %u "$WORK/rootdir") == 0 ]] || fail "the test folder is not root-owned"
+docker run -d --name "$NAME" -e PUID="$PUID" -e PGID="$PGID" -e UCG_HOST=x -e UCG_USERNAME=x -e UCG_PASSWORD=x \
+    -e RUN_ON_START=false -v "$WORK/rootdir:/backups" "$IMAGE" >/dev/null
+wait_for_init
+[[ $(stat -c %u "$WORK/rootdir") == "$PUID" ]] || fail "a root-owned /backups was not handed to PUID"
+docker rm -f "$NAME" >/dev/null
+
+echo "== a backup folder of another user is left alone"
+docker run --rm --entrypoint sh -v "$WORK:/w" "$IMAGE" -c 'mkdir /w/otherdir && chown 4242:4242 /w/otherdir'
+docker run -d --name "$NAME" -e PUID="$PUID" -e PGID="$PGID" -e UCG_HOST=x -e UCG_USERNAME=x -e UCG_PASSWORD=x \
+    -e RUN_ON_START=false -v "$WORK/otherdir:/backups" "$IMAGE" >/dev/null
+wait_for_init
+[[ $(stat -c %u "$WORK/otherdir") == 4242 ]] || fail "a /backups of another user was changed"
+docker rm -f "$NAME" >/dev/null
+
+# The wrapper drops to abc and gives it a HOME it can read. A stand-in for
+# backup.py reports who runs it; the real one needs a console.
+echo "== the wrapper runs Python as PUID with a usable HOME"
+cat > "$WORK/fake-backup.py" <<'PY'
+import os
+print(f"FAKE-RUN uid={os.getuid()} home={os.environ.get('HOME')}")
+PY
+chmod 644 "$WORK/fake-backup.py"
+docker run -d --name "$NAME" -e PUID="$PUID" -e PGID="$PGID" -e UCG_HOST=x -e UCG_USERNAME=x -e UCG_PASSWORD=x \
+    -e RUN_ON_START=TRUE -v "$WORK/fake-backup.py:/usr/local/bin/backup.py:ro" "$IMAGE" >/dev/null
+for _ in $(seq 1 30); do
+    in_log 'FAKE-RUN' && break
+    sleep 1
+done
+in_log "FAKE-RUN uid=$PUID home=/tmp" || fail "the wrapper did not run Python as PUID with HOME=/tmp"
 docker rm -f "$NAME" >/dev/null
 
 echo "== start"
