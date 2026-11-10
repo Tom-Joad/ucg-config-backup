@@ -187,7 +187,11 @@ def main(run):
         except requests.RequestException:
             pass
 
-    apply_retention(run)
+    try:
+        apply_retention(run)
+    except OSError as exc:  # e.g. the folder can't be listed
+        run["retention_warnings"] = run.get("retention_warnings", 0) + 1  # the listing itself failed
+        log(f"WARNING: retention failed: {exc}")
     log("Backup completed successfully.")
 
 
@@ -214,28 +218,49 @@ def login(session):
     refresh_csrf(session, resp)
 
 
-def save_backup(session, run):
-    log(f"Triggering backup on site '{SITE}'...")
-    resp = session.post(
+def request_backup(session):
+    return session.post(
         f"{BASE}/proxy/network/api/s/{SITE}/cmd/backup",
         json={"cmd": "backup", "days": "0"},
         timeout=30,
     )
+
+
+def backup_download_path(resp):
+    # Anything but a JSON object with a non-empty `data` list whose first item
+    # has a `url` (an HTML page from a proxy, a changed firmware answer) gets
+    # the same clear message instead of a JSONDecodeError or KeyError.
+    try:
+        payload = resp.json()
+        data = payload["data"]
+        return data[0]["url"]
+    except (ValueError, LookupError, TypeError):
+        raise RuntimeError(
+            f"Unexpected backup response, no download URL: {resp.text[:500]} "
+            "-- check that UCG_SITE is the right site name."
+        ) from None
+
+
+def save_backup(session, run):
+    log(f"Triggering backup on site '{SITE}'...")
+    resp = request_backup(session)
+    if resp.status_code == 403:
+        # A stale CSRF token or session gives a 403 as well: log in again
+        # once, with a fresh session and token, before giving up.
+        log("Backup command rejected (403), logging in again and retrying once...")
+        session.cookies.clear()
+        login(session)
+        resp = request_backup(session)
     if resp.status_code == 403:
         raise RuntimeError(
-            "Backup command rejected (403). Most likely cause: UCG_USERNAME does not "
-            "have full Administrator / Full Management rights on the Network application "
-            "(e.g. it's a Limited Admin or View Only role) -- grant it full management "
-            "access and try again. If the role is already correct, this can also be a "
-            "stale CSRF token; retrying usually resolves that."
+            "Backup command rejected (403), also after logging in again. Most likely "
+            "cause: UCG_USERNAME does not have full Administrator / Full Management "
+            "rights on the Network application (e.g. it's a Limited Admin or View Only "
+            "role) -- grant it full management access and try again."
         )
     resp.raise_for_status()
     refresh_csrf(session, resp)
-    payload = resp.json().get("data", [])
-    if not payload or "url" not in payload[0]:
-        raise RuntimeError(f"Unexpected backup response, no download URL: {resp.text[:500]}")
-
-    download_path = payload[0]["url"]
+    download_path = backup_download_path(resp)
     if download_path.startswith("/proxy/"):
         download_url = f"{BASE}{download_path}"
     elif download_path.startswith("/"):
@@ -267,26 +292,44 @@ def save_backup(session, run):
     log(f"Saved {target} ({len(dl.content)} bytes).")
 
 
+def expire(f, cutoff, run):
+    # Deletes f when it is older than cutoff and returns its size, else None.
+    # The backup is already saved: a file that can't be inspected or removed
+    # (gone in between, read-only share) is a warning, not a failed run.
+    try:
+        st = f.stat()
+        if st.st_mtime < cutoff:
+            f.unlink()
+            return st.st_size
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        run["retention_warnings"] += 1
+        log(f"WARNING: could not remove {f.name}: {exc}")
+    return None
+
+
 def apply_retention(run):
     now = time.time()
+    run["retention_warnings"] = 0
     for f in BACKUP_DIR.glob(".ucg-backup-*.unf.partial"):
-        if f.stat().st_mtime < now - PARTIAL_MAX_AGE_S:
-            f.unlink()
+        if expire(f, now - PARTIAL_MAX_AGE_S, run) is not None:
             log(f"Removed {f.name} left behind by an interrupted run.")
 
     if RETENTION_DAYS > 0:
         cutoff = now - RETENTION_DAYS * 86400
-        removed = 0
-        freed = 0
-        for f in BACKUP_DIR.glob("ucg-backup-*.unf"):
-            st = f.stat()
-            if st.st_mtime < cutoff:
-                f.unlink()
-                removed += 1
-                freed += st.st_size
-        if removed:
-            log(f"Retention: removed {removed} backup(s) older than {RETENTION_DAYS} days, freed {freed} bytes.")
+        sizes = [expire(f, cutoff, run) for f in BACKUP_DIR.glob("ucg-backup-*.unf")]
+        sizes = [size for size in sizes if size is not None]
+        if sizes:
+            log(f"Retention: removed {len(sizes)} backup(s) older than {RETENTION_DAYS} days, freed {sum(sizes)} bytes.")
     run["backups_kept"] = sum(1 for _ in BACKUP_DIR.glob("ucg-backup-*.unf"))
+
+
+def success_message(run):
+    message = run["filename"]
+    if run.get("retention_warnings"):
+        message += f" (retention had {run['retention_warnings']} warning(s), see the log)"
+    return message
 
 
 if __name__ == "__main__":
@@ -301,4 +344,4 @@ if __name__ == "__main__":
         notify(False, str(exc) or type(exc).__name__, run)
         sys.exit(1)
     if NOTIFY_ON_SUCCESS:
-        notify(True, run["filename"], run)
+        notify(True, success_message(run), run)

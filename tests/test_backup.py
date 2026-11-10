@@ -34,23 +34,25 @@ class FakeResponse:
 class FakeSession:
     """Stands in for the console: login, cmd/backup, download, logout."""
 
-    def __init__(self, backup_status=200, download_type="application/octet-stream"):
+    def __init__(self, backup_status=200, download_type="application/octet-stream", backup_json=None,
+                 backup_statuses=None):
         self.headers = {}
         self.cookies = {}
         self.verify = None
         self.calls = []
         self.backup_status = backup_status
         self.download_type = download_type
+        self.backup_json = {"data": [{"url": "/dl/file.unf"}]} if backup_json is None else backup_json
+        # One status per cmd/backup call, the last one repeats.
+        self.backup_statuses = list(backup_statuses or [backup_status])
 
     def post(self, url, **kwargs):
         self.calls.append(("POST", url))
         if url.endswith("/api/auth/login"):
             return FakeResponse(headers={"x-csrf-token": "tok"})
         if url.endswith("/cmd/backup"):
-            return FakeResponse(
-                status=self.backup_status,
-                json_data={"data": [{"url": "/dl/file.unf"}]},
-            )
+            status = self.backup_statuses.pop(0) if len(self.backup_statuses) > 1 else self.backup_statuses[0]
+            return FakeResponse(status=status, json_data=self.backup_json, text="<html>raw answer</html>")
         return FakeResponse()
 
     def get(self, url, **kwargs):
@@ -225,6 +227,97 @@ def test_retention_removes_stale_partials_and_logs_freed_space(settings, capsys)
     assert "freed 5 bytes" in capsys.readouterr().out
 
 
+class HtmlResponse(FakeResponse):
+    def json(self):
+        raise requests.exceptions.JSONDecodeError("Expecting value", "<html>", 0)
+
+
+@pytest.mark.parametrize("answer", [{"data": {"url": "/dl/file.unf"}}, {"data": []}, {}, [], {"data": [{}]}, {"data": [1]}])
+def test_unexpected_backup_answer_gives_the_clear_error(settings, monkeypatch, answer):
+    session = FakeSession(backup_json=answer)
+    monkeypatch.setattr(requests, "Session", lambda: session)
+    with pytest.raises(RuntimeError, match="Unexpected backup response, no download URL: .*UCG_SITE"):
+        backup.main(new_run())
+
+
+def test_a_non_json_backup_answer_gives_the_clear_error(settings, monkeypatch):
+    class HtmlSession(FakeSession):
+        def post(self, url, **kwargs):
+            if url.endswith("/cmd/backup"):
+                return HtmlResponse(text="<html>Bad gateway</html>")
+            return super().post(url, **kwargs)
+
+    monkeypatch.setattr(requests, "Session", lambda: HtmlSession())
+    with pytest.raises(RuntimeError, match="Unexpected backup response, no download URL: <html>Bad gateway</html>"):
+        backup.main(new_run())
+
+
+def test_a_403_is_retried_once_after_a_fresh_login(settings, monkeypatch):
+    session = FakeSession(backup_statuses=[403, 200])
+    monkeypatch.setattr(requests, "Session", lambda: session)
+    run = new_run()
+    backup.main(run)
+    assert [c for c in session.calls if c[1].endswith("/api/auth/login")] == [("POST", "https://192.0.2.1/api/auth/login")] * 2
+    assert [c for c in session.calls if c[1].endswith("/cmd/backup")] == [("POST", "https://192.0.2.1/proxy/network/api/s/default/cmd/backup")] * 2
+    assert run["filename"]
+
+
+def test_a_second_403_fails_after_one_retry(settings, monkeypatch):
+    session = FakeSession(backup_status=403)
+    monkeypatch.setattr(requests, "Session", lambda: session)
+    with pytest.raises(RuntimeError, match="also after logging in again"):
+        backup.main(new_run())
+    assert len([c for c in session.calls if c[1].endswith("/cmd/backup")]) == 2
+
+
+def old_backup(folder, name="ucg-backup-20200101-000000.unf"):
+    f = folder / name
+    f.write_bytes(b"old")
+    long_ago = time.time() - 40 * 86400
+    os.utime(f, (long_ago, long_ago))
+    return f
+
+
+def test_a_retention_error_does_not_fail_the_run(settings, monkeypatch, capsys):
+    old_backup(settings)
+    real_unlink = type(settings).unlink
+
+    def unlink(self, *args, **kwargs):
+        if self.name.startswith("ucg-backup-2020"):
+            raise PermissionError("read-only share")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(type(settings), "unlink", unlink)
+    monkeypatch.setattr(requests, "Session", lambda: FakeSession())
+    run = new_run()
+    backup.main(run)
+    out = capsys.readouterr().out
+    assert "WARNING: could not remove ucg-backup-20200101-000000.unf: read-only share" in out
+    assert "ERROR" not in out
+    assert "Backup completed successfully." in out
+    assert run["filename"] and run["retention_warnings"] == 1
+    assert run["backups_kept"] == 2
+
+
+def test_a_file_that_vanishes_during_retention_is_ignored(settings, monkeypatch):
+    old_backup(settings)
+    real_stat = type(settings).stat
+
+    def stat(self, *args, **kwargs):
+        if self.name.startswith("ucg-backup-2020"):
+            raise FileNotFoundError(self.name)
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(type(settings), "stat", stat)
+    run = new_run()
+    backup.apply_retention(run)
+    assert run["retention_warnings"] == 0
+
+
+def test_success_message_mentions_retention_warnings():
+    run = new_run() | {"filename": "f.unf", "retention_warnings": 2}
+    assert backup.success_message(run) == "f.unf (retention had 2 warning(s), see the log)"
+    assert backup.success_message(new_run() | {"filename": "f.unf"}) == "f.unf"
 @pytest.mark.parametrize("value,expected", [
     ("true", True), ("TRUE", True), (" True ", True), ("false", False), ("False", False),
     ("", False), ("yes", None), ("1", None), ("on", None),
