@@ -7,9 +7,15 @@ to be connected to Ubiquiti's cloud**.
 
 Instead of relying on UniFi OS "Automated System Backups" (which only run
 when the console is cloud-connected and upload the backup off-site), this
-container calls the same local API the **Download Backup** button in the
-Network app uses: it logs in with a local admin account, triggers
-`cmd/backup`, and saves the resulting `.unf` file to a mounted volume.
+container calls the same local API the console's own **Download Backup**
+buttons use. It logs in with a local admin account and saves two files to
+a mounted volume:
+
+* the **system backup** of the console (the one the UniFi OS settings offer
+  as "Backup for All Applications and Settings"), a `.unifi` file, and
+* the backup of the **Network application** (`cmd/backup`), a `.unf` file.
+  It is part of the system backup, and it is the file a self-hosted
+  UniFi Network server can restore.
 
 Built on linuxserver.io's Alpine base image, with the usual `PUID`, `PGID`,
 `UMASK` and `TZ` settings.
@@ -48,8 +54,12 @@ at container start via `RUN_ON_START`) the container:
 3. Downloads the returned one-time backup URL and saves it as
    `ucg-backup-<timestamp>.unf` into `/backups`. A download that turns out
    to be a web page or an error message instead of a backup fails the run.
-4. Logs out again, also when a step failed.
-5. Deletes local backups older than `RETENTION_DAYS`, and optionally posts
+4. Downloads the console's system backup (`/api/backup/download`) and
+   saves it as `ucg-system-backup-<timestamp>.unifi`, with the same check.
+   If the console refuses it, the run fails, and the Network backup from
+   step 3 stays. `SYSTEM_BACKUP=false` skips this step.
+5. Logs out again, also when a step failed.
+6. Deletes local backups older than `RETENTION_DAYS`, and optionally posts
    a notification to `WEBHOOK_URL`.
 
 Only one backup runs at a time: a run that starts while another one is
@@ -64,8 +74,9 @@ block this simple login flow):
 UniFi OS UI → **Settings → Admins & Users → Invite Admin** → enable
 *"Restrict to local access only"* (or the equivalent for your firmware),
 give it the **Administrator** role with **full management** rights on the
-Network application (required for `cmd/backup`), and do **not** enable 2FA
-for this account.
+Network application (required for `cmd/backup`) and on the console itself
+(required for the system backup), and do **not** enable 2FA for this
+account.
 
 ## Supported architectures
 
@@ -151,8 +162,8 @@ Install it from **Community Applications** (search for
 update an existing container, are in
 [unraid/README-UNRAID.md](unraid/README-UNRAID.md).
 
-This container has no web UI and exposes no ports. It writes `.unf` files
-to `/backups` and reports in the container log.
+This container has no web UI and exposes no ports. It writes `.unf` and
+`.unifi` files to `/backups` and reports in the container log.
 
 ### Synology (Container Manager / Docker)
 
@@ -178,7 +189,7 @@ registry first.
      `TZ`, and any optional variables below.
    * Enable **Enable auto-restart**.
 4. Start the container, then confirm via **Container** → **Details** →
-   **Log** that the first backup ran cleanly. Finished `.unf` files appear
+   **Log** that the first backup ran cleanly. Finished backup files appear
    in the shared folder you mapped to `/backups`.
 
 You can also schedule DSM's own **Hyper Backup** or a **Task Scheduler**
@@ -196,7 +207,7 @@ as those above). The usual linuxserver.io parameters apply:
 | `-e PGID=1000` | Group ID of the same |
 | `-e UMASK=022` | Umask of the backup files (`002` lets the group write) |
 | `-e TZ=Europe/Berlin` | Timezone for the schedule and log timestamps |
-| `-v /backups` | The downloaded `.unf` backup files |
+| `-v /backups` | The downloaded backup files (`.unf` and `.unifi`) |
 
 Don't use `--user` or `--init`; the image runs s6-overlay as PID 1 and
 drops to `PUID:PGID` itself. `LSIO_NON_ROOT_USER` is not supported either:
@@ -211,6 +222,7 @@ with it set.
 | `UCG_USERNAME` | yes | – | Local admin username (see [Prerequisites](#prerequisites-on-the-ucg-ultra)) |
 | `UCG_PASSWORD` | yes | – | Password for that account |
 | `UCG_SITE` | | `default` | UniFi site name |
+| `SYSTEM_BACKUP` | | `true` | `true` or `false`: also save the console's system backup (all applications and settings) next to the Network backup |
 | `VERIFY_SSL` | | `false` | `true` or `false` (any case; anything else stops the container): verify the console's TLS certificate (UniFi OS ships a self-signed cert by default) |
 | `CRON_SCHEDULE` | | `0 3 * * *` | Cron expression for the backup run (five fields, each inside its range, separated by spaces or tabs; anything else stops the container with an `ERROR:` line) |
 | `RETENTION_DAYS` | | `30` | Delete local backups older than N days (`0` = keep forever; anything but a whole number of 0 or more stops the container) |
@@ -228,7 +240,7 @@ If `WEBHOOK_URL` is set, the container sends a POST after a failed run —
 and after a successful one too with `NOTIFY_ON_SUCCESS=true`.
 `WEBHOOK_FORMAT` picks the body:
 
-* **`text`** (default) — `UCG backup OK: <filename>` or
+* **`text`** (default) — `UCG backup OK: <filenames>` or
   `UCG backup FAILED: <error>` as a plain-text body. Works with ntfy.sh and
   Healthchecks.io.
 * **`json`** — an `application/json` body with a fixed set of fields.
@@ -238,7 +250,7 @@ and after a successful one too with `NOTIFY_ON_SUCCESS=true`.
 ```json
 {
   "status": "ok",
-  "message": "ucg-backup-20261020-030014.unf",
+  "message": "ucg-backup-20261020-030014.unf, ucg-system-backup-20261020-030015.unifi",
   "filename": "ucg-backup-20261020-030014.unf",
   "size_bytes": 2410496,
   "duration_s": 12.4,
@@ -246,6 +258,9 @@ and after a successful one too with `NOTIFY_ON_SUCCESS=true`.
   "site": "default",
   "retention_days": 30,
   "backups_kept": 30,
+  "system_filename": "ucg-system-backup-20261020-030015.unifi",
+  "system_size_bytes": 2731008,
+  "system_backups_kept": 30,
   "timestamp": "2026-10-20T03:00:26+02:00",
   "version": "2.2.0"
 }
@@ -254,13 +269,16 @@ and after a successful one too with `NOTIFY_ON_SUCCESS=true`.
 | Field | Description |
 | --- | --- |
 | `status` | Always `ok` or `failed` (lowercase) — the value to trigger on |
-| `message` | Human-readable part: the filename on success, the error on failure |
-| `filename` | Name of the saved `.unf` file |
-| `size_bytes` | Size of the saved file — use it to catch empty or suspiciously small backups that still report `ok` |
+| `message` | Human-readable part: the filenames on success, the error on failure |
+| `filename` | Name of the saved Network backup (`.unf`) |
+| `size_bytes` | Size of that file — use it to catch empty or suspiciously small backups that still report `ok` |
 | `duration_s` | Run duration in seconds |
 | `host`, `site` | `UCG_HOST` and `UCG_SITE` of the run |
 | `retention_days` | Effective `RETENTION_DAYS` |
 | `backups_kept` | Number of `ucg-backup-*.unf` files in `/backups` after retention |
+| `system_filename` | Name of the saved system backup (`.unifi`); `null` with `SYSTEM_BACKUP=false` |
+| `system_size_bytes` | Size of that file |
+| `system_backups_kept` | Number of `ucg-system-backup-*` files in `/backups` after retention |
 | `timestamp` | ISO 8601 with the offset of `TZ` |
 | `version` | Container version |
 
@@ -305,7 +323,7 @@ trigger the automation.
 
 | Path | Contents |
 | --- | --- |
-| `/backups` | Downloaded `.unf` backup files, named `ucg-backup-<timestamp>.unf`, owned by `PUID:PGID` |
+| `/backups` | Downloaded backup files, named `ucg-backup-<timestamp>.unf` (Network application) and `ucg-system-backup-<timestamp>.unifi` (whole console), owned by `PUID:PGID` |
 
 `/backups` is the only volume; the container keeps no other state. Its
 crontab is rebuilt from `CRON_SCHEDULE` at every start. If the host folder
@@ -315,6 +333,12 @@ belongs to someone else is left alone.
 
 ## Upgrading
 
+* **From 2.2.x:** every run now also saves the console's system backup,
+  so `/backups` holds two files per run. If the log shows
+  `System backup download rejected`, give the backup account full rights
+  on the console, or set `SYSTEM_BACKUP=false` to keep the old behaviour.
+  The webhook's JSON body has three new fields; the existing ones are
+  unchanged.
 * **From 2.1.x:** the `/config` volume is no longer used. Remove the
   mapping (Unraid: the *Config Directory* path) and delete the folder on
   the host when you like; leaving it mapped does no harm.
@@ -341,7 +365,7 @@ belongs to someone else is left alone.
   console, set `VERIFY_SSL=true`.
 * Use a dedicated local admin account scoped to what backups need — don't
   reuse your primary login.
-* A `.unf` file holds the console's whole configuration. Keep `/backups`
+* The backup files hold the console's whole configuration. Keep `/backups`
   readable only by the users who need it.
 
 ## Troubleshooting
@@ -358,6 +382,12 @@ belongs to someone else is left alone.
   a rotating CSRF token between login and the backup call — the script
   automatically adopts an `x-updated-csrf-token` from UniFi OS if present, and
   a `403` is retried once after a fresh login before the run fails.
+* **`System backup download rejected (401/403/404)`** — the console
+  didn't hand out its system backup. `401`/`403`: the account lacks rights
+  on the console itself (see [Prerequisites](#prerequisites-on-the-ucg-ultra)).
+  `404`: this UniFi OS version doesn't have the download. The Network
+  backup of the run is saved either way; `SYSTEM_BACKUP=false` turns the
+  system backup off.
 * **`Unexpected backup response, no download URL`** — the API response
   shape can differ slightly between firmware versions; check the full log
   (`docker logs ucg-config-backup`) and verify `UCG_SITE` (the site name

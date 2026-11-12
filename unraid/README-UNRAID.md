@@ -33,6 +33,7 @@ All under **Show more settings**:
 | --- | --- |
 | `CRON_SCHEDULE` | When the backup runs, default daily at 03:00 |
 | `RETENTION_DAYS` | How long backups are kept, default 30 days |
+| `SYSTEM_BACKUP` | `false` saves only the Network backup, without the console's system backup |
 | `WEBHOOK_URL`, `WEBHOOK_FORMAT`, `NOTIFY_ON_SUCCESS` | Notifications, e.g. to Home Assistant (`json`) or ntfy.sh (`text`) |
 
 ## Updating

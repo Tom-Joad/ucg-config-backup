@@ -11,14 +11,14 @@
   <Icon>https://raw.githubusercontent.com/Tom-Joad/unraid-templates/main/icons/ucg-config-backup.png</Icon>
   <TemplateURL>https://raw.githubusercontent.com/Tom-Joad/ucg-config-backup/main/unraid/ucg-config-backup.xml</TemplateURL>
   <Overview>
-    Logs in to the local UniFi OS API of a UCG Ultra (or another UniFi OS console), triggers a
-    config backup and downloads it on a cron schedule. The console needs no cloud connection.
+    Logs in to the local UniFi OS API of a UCG Ultra (or another UniFi OS console), and downloads
+    the Network backup and the console's system backup on a cron schedule. The console needs no cloud connection.
     Old backups are deleted after RETENTION_DAYS; failures (and optionally successes) can be
     sent to a webhook. Progress is in the container log.
   </Overview>
   <Category>Backup: Network:Other</Category>
   <ExtraParams>--security-opt no-new-privileges</ExtraParams>
-  <Config Name="Backup Directory" Target="/backups" Default="/mnt/user/appdata/ucg-config-backup/backups" Mode="rw" Description="Where the .unf backup files are stored" Type="Path" Display="always" Required="true" Mask="false"/>
+  <Config Name="Backup Directory" Target="/backups" Default="/mnt/user/appdata/ucg-config-backup/backups" Mode="rw" Description="Where the backup files (.unf and .unifi) are stored" Type="Path" Display="always" Required="true" Mask="false"/>
   <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="User that owns the backups (nobody)" Type="Variable" Display="always" Required="true" Mask="false"/>
   <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="Group for the backups (users)" Type="Variable" Display="always" Required="true" Mask="false"/>
   <Config Name="UMASK" Target="UMASK" Default="002" Mode="" Description="002: new files are writable for the users group, e.g. over SMB" Type="Variable" Display="advanced" Required="false" Mask="false"/>
@@ -26,6 +26,7 @@
   <Config Name="UCG_USERNAME" Target="UCG_USERNAME" Default="" Mode="" Description="Local admin user dedicated to backups (no cloud/SSO account, no 2FA)" Type="Variable" Display="always" Required="true" Mask="false"/>
   <Config Name="UCG_PASSWORD" Target="UCG_PASSWORD" Default="" Mode="" Description="Password of that user" Type="Variable" Display="always" Required="true" Mask="true"/>
   <Config Name="UCG_SITE" Target="UCG_SITE" Default="default" Mode="" Description="UniFi site name" Type="Variable" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="SYSTEM_BACKUP" Target="SYSTEM_BACKUP" Default="true" Mode="" Description="Also save the console's system backup (all applications and settings); false = Network backup only" Type="Variable" Display="advanced" Required="false" Mask="false"/>
   <Config Name="VERIFY_SSL" Target="VERIFY_SSL" Default="false" Mode="" Description="Check the console's TLS certificate (UniFi OS ships a self-signed one)" Type="Variable" Display="advanced" Required="false" Mask="false"/>
   <Config Name="CRON_SCHEDULE" Target="CRON_SCHEDULE" Default="0 3 * * *" Mode="" Description="When the backup runs (cron: minute hour day month weekday)" Type="Variable" Display="advanced" Required="false" Mask="false"/>
   <Config Name="RETENTION_DAYS" Target="RETENTION_DAYS" Default="30" Mode="" Description="Delete local backups older than N days (0 = keep everything)" Type="Variable" Display="advanced" Required="false" Mask="false"/>

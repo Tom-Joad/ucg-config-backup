@@ -5,6 +5,24 @@ All notable changes to this project are listed here. Versions follow
 upgrading (a renamed or removed setting, a different folder layout, a changed
 webhook payload) only comes with a new major version.
 
+## [Unreleased]
+
+### Upgrading
+- Every run now saves two files. If the log shows `System backup download
+  rejected`, give the backup account full rights on the console itself, or
+  set `SYSTEM_BACKUP=false` to keep the old behaviour. Unraid: add the
+  variable by hand, an installed container's template isn't updated.
+
+### Added
+- The console's system backup ("Backup for All Applications and Settings" in
+  the UniFi OS settings) is saved next to the Network backup, as
+  `ucg-system-backup-<timestamp>.unifi`. Until now only the Network
+  application's `.unf` file was saved, which is not the whole console.
+  `RETENTION_DAYS` covers both kinds of file.
+- `SYSTEM_BACKUP` (`true` by default): `false` saves the Network backup only.
+- The webhook's JSON body has `system_filename`, `system_size_bytes` and
+  `system_backups_kept`; on success `message` names both files.
+
 ## [2.2.8] - 2026-11-10
 
 ### Changed
