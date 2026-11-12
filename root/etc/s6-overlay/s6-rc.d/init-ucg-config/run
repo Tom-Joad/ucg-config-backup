@@ -27,7 +27,7 @@ setting() {
     printf '%s' "${value}"
 }
 
-for name in VERIFY_SSL NOTIFY_ON_SUCCESS RUN_ON_START; do
+for name in VERIFY_SSL NOTIFY_ON_SUCCESS RUN_ON_START SYSTEM_BACKUP; do
     value=$(setting "${name}")
     if [[ -n ${value} && ${value,,} != true && ${value,,} != false ]]; then
         echo "ERROR: ${name} must be 'true' or 'false', got '${value}'" >&2

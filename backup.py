@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Trigger and download a UniFi OS config backup via the local network API.
+"""Trigger and download UniFi OS backups via the console's local API.
 
 Used instead of pulling pre-existing autobackup files because "Automated
 System Backups" on UniFi OS requires the console to be connected to
-Ubiquiti's cloud. This talks to the same local API the "Download Backup"
-button in the Network app uses, so it works fully offline/local-only.
+Ubiquiti's cloud. This talks to the same local API the console's own
+"Download Backup" buttons use, so it works fully offline/local-only. Two
+files are saved per run: the Network application's backup (.unf) and the
+console's system backup for all applications and settings (.unifi).
 """
 import datetime
 import os
 import pathlib
+import re
 import sys
 import time
 import urllib.parse
@@ -50,6 +53,7 @@ if RETENTION_DAYS is not None and RETENTION_DAYS < 0:
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")
 WEBHOOK_FORMAT = os.environ.get("WEBHOOK_FORMAT", "text").strip().lower() or "text"
 NOTIFY_ON_SUCCESS = read_bool("NOTIFY_ON_SUCCESS", "false")
+SYSTEM_BACKUP = read_bool("SYSTEM_BACKUP", "true")
 
 # Seconds to wait before each webhook retry. Home Assistant is briefly
 # unreachable while it restarts, and the default 03:00 run can land in a
@@ -70,6 +74,12 @@ PARTIAL_MAX_AGE_S = 3600
 # What a console sends instead of a backup when something is off (a login
 # page, an error object). A .unf file is encrypted binary.
 NOT_A_BACKUP_TYPES = ("text/html", "application/json")
+
+# The system backup's extension comes from the name the console gives the
+# download (".unifi" today); this is the fallback when it names none.
+SYSTEM_BACKUP_SUFFIX = ".unifi"
+# The console builds the system backup while the request waits.
+SYSTEM_BACKUP_TIMEOUT = (15, 300)
 
 BASE = f"https://{HOST}"
 
@@ -98,6 +108,9 @@ def build_payload(ok, message, run):
         "site": SITE,
         "retention_days": RETENTION_DAYS,
         "backups_kept": run["backups_kept"],
+        "system_filename": run["system_filename"],
+        "system_size_bytes": run["system_size_bytes"],
+        "system_backups_kept": run["system_backups_kept"],
         "timestamp": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
         "version": VERSION,
     }
@@ -157,7 +170,9 @@ def main(run):
     if missing:
         raise RuntimeError(f"Missing required setting(s): {', '.join(missing)}")
     bad_bools = [
-        name for name, value in (("VERIFY_SSL", VERIFY_SSL), ("NOTIFY_ON_SUCCESS", NOTIFY_ON_SUCCESS))
+        name for name, value in (
+            ("VERIFY_SSL", VERIFY_SSL), ("NOTIFY_ON_SUCCESS", NOTIFY_ON_SUCCESS), ("SYSTEM_BACKUP", SYSTEM_BACKUP),
+        )
         if value is None
     ]
     if bad_bools:
@@ -181,6 +196,8 @@ def main(run):
     # the console.
     try:
         save_backup(session, run)
+        if SYSTEM_BACKUP:
+            save_system_backup(session, run)
     finally:
         try:
             session.post(f"{BASE}/api/auth/logout", timeout=10)
@@ -271,13 +288,47 @@ def save_backup(session, run):
     log(f"Downloading backup from {download_url}...")
     dl = session.get(download_url, timeout=60)
     dl.raise_for_status()
+    filename = f"ucg-backup-{datetime.datetime.now():%Y%m%d-%H%M%S}.unf"
+    run["filename"] = store_download(dl, filename)
+    run["size_bytes"] = len(dl.content)
+
+
+def system_backup_suffix(resp):
+    # The extension of the name the console gives the download, so the file
+    # can be handed back to the console's restore dialog as it is.
+    disposition = resp.headers.get("content-disposition", "")
+    match = re.search(r"filename\*?=[^;]*?(\.[A-Za-z0-9]{1,10})[\"']?\s*(?:;|$)", disposition)
+    return match.group(1).lower() if match else SYSTEM_BACKUP_SUFFIX
+
+
+def save_system_backup(session, run):
+    # The "Download Backup" button of the console itself ("Backup for All
+    # Applications and Settings"). The Network backup above is already saved
+    # when this fails.
+    log("Downloading the system backup (all applications and settings)...")
+    dl = session.get(f"{BASE}/api/backup/download", timeout=SYSTEM_BACKUP_TIMEOUT)
+    if dl.status_code in (401, 403, 404):
+        if dl.status_code == 404:
+            reason = "this console does not offer it, its UniFi OS may be too old"
+        else:
+            reason = "UCG_USERNAME may not be allowed to download it, it needs full rights on the console itself"
+        raise RuntimeError(
+            f"System backup download rejected ({dl.status_code}): {reason}. The Network backup of this "
+            "run is saved. Set SYSTEM_BACKUP=false to back up the Network application only."
+        )
+    dl.raise_for_status()
+    filename = f"ucg-system-backup-{datetime.datetime.now():%Y%m%d-%H%M%S}{system_backup_suffix(dl)}"
+    run["system_filename"] = store_download(dl, filename)
+    run["system_size_bytes"] = len(dl.content)
+
+
+def store_download(dl, filename):
     if not dl.content:
         raise RuntimeError("Downloaded backup file is empty.")
     content_type = dl.headers.get("content-type", "").split(";")[0].strip().lower()
     if content_type in NOT_A_BACKUP_TYPES:
         raise RuntimeError(f"Download returned {content_type} instead of a backup file.")
 
-    filename = f"ucg-backup-{datetime.datetime.now():%Y%m%d-%H%M%S}.unf"
     target = BACKUP_DIR / filename
     # Written under a hidden name and renamed when complete: a run that dies
     # half-way leaves no partial backup that retention would count as one.
@@ -287,9 +338,8 @@ def save_backup(session, run):
         partial.replace(target)
     finally:
         partial.unlink(missing_ok=True)
-    run["filename"] = filename
-    run["size_bytes"] = len(dl.content)
     log(f"Saved {target} ({len(dl.content)} bytes).")
+    return filename
 
 
 def expire(f, cutoff, run):
@@ -312,31 +362,44 @@ def expire(f, cutoff, run):
 def apply_retention(run):
     now = time.time()
     run["retention_warnings"] = 0
-    for f in BACKUP_DIR.glob(".ucg-backup-*.unf.partial"):
-        if expire(f, now - PARTIAL_MAX_AGE_S, run) is not None:
-            log(f"Removed {f.name} left behind by an interrupted run.")
+    for pattern in (".ucg-backup-*.unf.partial", ".ucg-system-backup-*.partial"):
+        for f in BACKUP_DIR.glob(pattern):
+            if expire(f, now - PARTIAL_MAX_AGE_S, run) is not None:
+                log(f"Removed {f.name} left behind by an interrupted run.")
 
     if RETENTION_DAYS > 0:
         cutoff = now - RETENTION_DAYS * 86400
-        sizes = [expire(f, cutoff, run) for f in BACKUP_DIR.glob("ucg-backup-*.unf")]
+        sizes = [
+            expire(f, cutoff, run)
+            for pattern in ("ucg-backup-*.unf", "ucg-system-backup-*")
+            for f in BACKUP_DIR.glob(pattern)
+        ]
         sizes = [size for size in sizes if size is not None]
         if sizes:
             log(f"Retention: removed {len(sizes)} backup(s) older than {RETENTION_DAYS} days, freed {sum(sizes)} bytes.")
     run["backups_kept"] = sum(1 for _ in BACKUP_DIR.glob("ucg-backup-*.unf"))
+    run["system_backups_kept"] = sum(1 for _ in BACKUP_DIR.glob("ucg-system-backup-*"))
 
 
 def success_message(run):
-    message = run["filename"]
+    message = ", ".join(name for name in (run["filename"], run.get("system_filename")) if name)
     if run.get("retention_warnings"):
         message += f" (retention had {run['retention_warnings']} warning(s), see the log)"
     return message
+
+
+def new_run():
+    return {
+        "started": time.monotonic(), "filename": None, "size_bytes": None, "backups_kept": None,
+        "system_filename": None, "system_size_bytes": None, "system_backups_kept": None,
+    }
 
 
 if __name__ == "__main__":
     if "--version" in sys.argv[1:]:
         print(VERSION)
         sys.exit(0)
-    run = {"started": time.monotonic(), "filename": None, "size_bytes": None, "backups_kept": None}
+    run = new_run()
     try:
         main(run)
     except Exception as exc:  # noqa: BLE001 - top-level guard, must always notify+exit non-zero

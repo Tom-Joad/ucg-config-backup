@@ -32,10 +32,10 @@ class FakeResponse:
 
 
 class FakeSession:
-    """Stands in for the console: login, cmd/backup, download, logout."""
+    """Stands in for the console: login, cmd/backup, both downloads, logout."""
 
     def __init__(self, backup_status=200, download_type="application/octet-stream", backup_json=None,
-                 backup_statuses=None):
+                 backup_statuses=None, system_status=200, system_headers=None):
         self.headers = {}
         self.cookies = {}
         self.verify = None
@@ -45,6 +45,8 @@ class FakeSession:
         self.backup_json = {"data": [{"url": "/dl/file.unf"}]} if backup_json is None else backup_json
         # One status per cmd/backup call, the last one repeats.
         self.backup_statuses = list(backup_statuses or [backup_status])
+        self.system_status = system_status
+        self.system_headers = {"content-type": "application/octet-stream"} if system_headers is None else system_headers
 
     def post(self, url, **kwargs):
         self.calls.append(("POST", url))
@@ -57,6 +59,8 @@ class FakeSession:
 
     def get(self, url, **kwargs):
         self.calls.append(("GET", url))
+        if url.endswith("/api/backup/download"):
+            return FakeResponse(status=self.system_status, headers=self.system_headers, content=b"system-data")
         return FakeResponse(headers={"content-type": self.download_type}, content=b"unf-data")
 
 
@@ -72,8 +76,7 @@ def settings(tmp_path, monkeypatch):
     return tmp_path
 
 
-def new_run():
-    return {"started": time.monotonic(), "filename": None, "size_bytes": None, "backups_kept": None}
+new_run = backup.new_run
 
 
 def test_version_flag():
@@ -94,7 +97,8 @@ def test_payload_always_has_every_key():
     assert payload["filename"] is None
     assert set(payload) == {
         "status", "message", "filename", "size_bytes", "duration_s", "host", "site",
-        "retention_days", "backups_kept", "timestamp", "version",
+        "retention_days", "backups_kept", "system_filename", "system_size_bytes", "system_backups_kept",
+        "timestamp", "version",
     }
     assert payload["version"] == backup.VERSION
 
@@ -177,6 +181,11 @@ def test_main_saves_backup_and_applies_retention(settings, monkeypatch):
     assert run["size_bytes"] == len(b"unf-data")
     assert (settings / run["filename"]).read_bytes() == b"unf-data"
     assert run["backups_kept"] == 1
+    assert run["system_filename"].endswith(".unifi")
+    assert run["system_size_bytes"] == len(b"system-data")
+    assert (settings / run["system_filename"]).read_bytes() == b"system-data"
+    assert run["system_backups_kept"] == 1
+    assert ("GET", "https://192.0.2.1/api/backup/download") in session.calls
     assert ("GET", "https://192.0.2.1/proxy/network/dl/file.unf") in session.calls
     assert session.headers["X-CSRF-Token"] == "tok"
 
@@ -297,6 +306,7 @@ def test_a_retention_error_does_not_fail_the_run(settings, monkeypatch, capsys):
     assert "Backup completed successfully." in out
     assert run["filename"] and run["retention_warnings"] == 1
     assert run["backups_kept"] == 2
+    assert run["system_backups_kept"] == 1
 
 
 def test_a_file_that_vanishes_during_retention_is_ignored(settings, monkeypatch):
@@ -318,6 +328,10 @@ def test_success_message_mentions_retention_warnings():
     run = new_run() | {"filename": "f.unf", "retention_warnings": 2}
     assert backup.success_message(run) == "f.unf (retention had 2 warning(s), see the log)"
     assert backup.success_message(new_run() | {"filename": "f.unf"}) == "f.unf"
+    both = new_run() | {"filename": "f.unf", "system_filename": "s.unifi"}
+    assert backup.success_message(both) == "f.unf, s.unifi"
+
+
 @pytest.mark.parametrize("value,expected", [
     ("true", True), ("TRUE", True), (" True ", True), ("false", False), ("False", False),
     ("", False), ("yes", None), ("1", None), ("on", None),
@@ -332,7 +346,7 @@ def test_read_bool_uses_the_default_when_unset(monkeypatch):
     assert backup.read_bool("SOME_FLAG", "true") is True
 
 
-@pytest.mark.parametrize("name", ["VERIFY_SSL", "NOTIFY_ON_SUCCESS"])
+@pytest.mark.parametrize("name", ["VERIFY_SSL", "NOTIFY_ON_SUCCESS", "SYSTEM_BACKUP"])
 def test_main_rejects_a_boolean_that_is_not_true_or_false(settings, monkeypatch, name):
     monkeypatch.setattr(backup, name, None)
     with pytest.raises(RuntimeError, match=f"{name} must be 'true' or 'false'"):
@@ -368,3 +382,63 @@ def test_notify_does_not_retry_an_invalid_url(monkeypatch, capsys, error):
     assert sleeps == []
     assert f"webhook URL is not valid ({error.__name__})" in out
     assert "secret" not in out
+
+
+def test_system_backup_can_be_switched_off(settings, monkeypatch):
+    session = FakeSession()
+    monkeypatch.setattr(requests, "Session", lambda: session)
+    monkeypatch.setattr(backup, "SYSTEM_BACKUP", False)
+    run = new_run()
+    backup.main(run)
+    assert run["filename"] and run["system_filename"] is None
+    assert run["system_backups_kept"] == 0
+    assert not [c for c in session.calls if c[1].endswith("/api/backup/download")]
+    assert not list(settings.glob("ucg-system-backup-*"))
+
+
+@pytest.mark.parametrize("status,hint", [(403, "full rights on the console"), (401, "full rights"), (404, "too old")])
+def test_a_rejected_system_backup_fails_the_run_but_keeps_the_network_backup(settings, monkeypatch, status, hint):
+    session = FakeSession(system_status=status)
+    monkeypatch.setattr(requests, "Session", lambda: session)
+    run = new_run()
+    with pytest.raises(RuntimeError, match=f"System backup download rejected \\({status}\\).*{hint}.*SYSTEM_BACKUP=false"):
+        backup.main(run)
+    assert (settings / run["filename"]).read_bytes() == b"unf-data"
+    assert run["system_filename"] is None
+    assert not list(settings.glob("ucg-system-backup-*"))
+    assert ("POST", "https://192.0.2.1/api/auth/logout") in session.calls
+
+
+def test_a_web_page_instead_of_the_system_backup_fails_the_run(settings, monkeypatch):
+    session = FakeSession(system_headers={"content-type": "text/html"})
+    monkeypatch.setattr(requests, "Session", lambda: session)
+    with pytest.raises(RuntimeError, match="text/html"):
+        backup.main(new_run())
+    assert not list(settings.glob("ucg-system-backup-*"))
+
+
+@pytest.mark.parametrize("disposition,suffix", [
+    ('attachment; filename="unifi_os_backup_1794507188630_9a571516.unifi"', ".unifi"),
+    ("attachment; filename=backup.UBV", ".ubv"),
+    ("attachment; filename*=UTF-8''unifi_os_backup_1.unifi", ".unifi"),
+    ('attachment; filename="backup.tar.gz"; size=3', ".gz"),
+    ('attachment; filename="../../etc/passwd"', ".unifi"),
+    ('attachment; filename="no-extension"', ".unifi"),
+    ("", ".unifi"),
+])
+def test_system_backup_takes_its_extension_from_the_console(disposition, suffix):
+    resp = FakeResponse(headers={"content-disposition": disposition})
+    assert backup.system_backup_suffix(resp) == suffix
+
+
+def test_retention_covers_system_backups(settings):
+    old = old_backup(settings, "ucg-system-backup-20200101-000000.unifi")
+    stale = old_backup(settings, ".ucg-system-backup-20200101-000000.unifi.partial")
+    fresh = settings / "ucg-system-backup-20990101-000000.unifi"
+    fresh.write_bytes(b"new")
+    run = new_run()
+    backup.apply_retention(run)
+    assert not old.exists() and not stale.exists()
+    assert fresh.exists()
+    assert run["system_backups_kept"] == 1
+    assert run["backups_kept"] == 0

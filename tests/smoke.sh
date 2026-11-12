@@ -66,6 +66,7 @@ expect_stop "a schedule of letters" 'ERROR: CRON_SCHEDULE must have five' -e CRO
 expect_stop "a schedule with a line break" 'ERROR: CRON_SCHEDULE must have five' -e CRON_SCHEDULE=$'0 3 * * *\n0 4 * * *'
 expect_stop "VERIFY_SSL=yes" "ERROR: VERIFY_SSL must be 'true' or 'false'" -e VERIFY_SSL=yes
 expect_stop "NOTIFY_ON_SUCCESS=1" "ERROR: NOTIFY_ON_SUCCESS must be" -e NOTIFY_ON_SUCCESS=1
+expect_stop "SYSTEM_BACKUP=yes" "ERROR: SYSTEM_BACKUP must be" -e SYSTEM_BACKUP=yes
 expect_stop "RUN_ON_START=on" "ERROR: RUN_ON_START must be" -e RUN_ON_START=on
 expect_stop "RETENTION_DAYS=abc" 'ERROR: RETENTION_DAYS must be a whole number' -e RETENTION_DAYS=abc
 expect_stop "WEBHOOK_FORMAT=xml" "ERROR: WEBHOOK_FORMAT must be 'text' or 'json'" -e WEBHOOK_FORMAT=xml
