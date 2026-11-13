@@ -7,6 +7,29 @@ webhook payload) only comes with a new major version.
 
 ## [Unreleased]
 
+### Upgrading
+- The container log is JSON now, one object per line (`ts`, `level`,
+  `event`, more fields), like the other containers. If something parses the
+  old `[2026-...] message` lines, or you watch for `ERROR:` in the log,
+  adapt it: errors are lines with `"level":"ERROR"`. The webhook is
+  unchanged. The base image's start-up output and the settings check at
+  container start stay plain text.
+
+### Added
+- `UCG_CERT_SHA256`: pin the console's TLS certificate by its SHA-256
+  fingerprint. With it set, a connection to any other certificate fails the
+  run before the login, naming the expected and the actual fingerprint, and
+  it works independently of `VERIFY_SSL`. Every run logs the fingerprint the
+  console presents (`console_certificate`), so it can be copied.
+- `LOG_LEVEL` (`INFO` by default; `DEBUG` adds the steps of a run).
+- `RUN_TIMEOUT` (`1800` seconds by default): the longest one run may take.
+
+### Changed
+- Logging is JSON lines with `starting` as the first line of every run, as
+  `standards/runtime.md` asks of Python apps. A wrong setting is logged as
+  `config_invalid`, a failed run as `run_failed`.
+- The base image digest is the current `baseimage-alpine:3.24`.
+
 ### Fixed
 - A download that is not a backup is no longer kept as one. An error text
   the console sent with status 200 (plain text, or no content type) used to
@@ -38,15 +61,9 @@ webhook payload) only comes with a new major version.
   in use (never the password or the webhook URL), also when a setting is
   wrong; before, settings errors came first and the line had no settings.
 
-### Added
-- `RUN_TIMEOUT` (`1800` seconds by default): the longest one run may take.
-
 ### Docs
 - The README says how to keep backups from other users (`UMASK=027` or
   `077`), documents `LOCAL_BACKUP_DIR` and the keep-the-newest-three rule.
-
-### Changed
-- The base image digest is the current `baseimage-alpine:3.24`.
 
 ## [2.3.0] - 2026-11-12
 

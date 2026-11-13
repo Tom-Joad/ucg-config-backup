@@ -71,6 +71,8 @@ expect_stop "VERIFY_SSL=yes" "ERROR: VERIFY_SSL must be 'true' or 'false'" -e VE
 expect_stop "NOTIFY_ON_SUCCESS=1" "ERROR: NOTIFY_ON_SUCCESS must be" -e NOTIFY_ON_SUCCESS=1
 expect_stop "SYSTEM_BACKUP=yes" "ERROR: SYSTEM_BACKUP must be" -e SYSTEM_BACKUP=yes
 expect_stop "RUN_ON_START=on" "ERROR: RUN_ON_START must be" -e RUN_ON_START=on
+expect_stop "LOG_LEVEL=LOUD" 'ERROR: LOG_LEVEL must be' -e LOG_LEVEL=LOUD
+expect_stop "a malformed UCG_CERT_SHA256" 'ERROR: UCG_CERT_SHA256 must be' -e UCG_CERT_SHA256=abc123
 expect_stop "RETENTION_DAYS=abc" 'ERROR: RETENTION_DAYS must be a whole number' -e RETENTION_DAYS=abc
 expect_stop "WEBHOOK_FORMAT=xml" "ERROR: WEBHOOK_FORMAT must be 'text' or 'json'" -e WEBHOOK_FORMAT=xml
 expect_stop "a UCG_HOST with a scheme" 'ERROR: UCG_HOST must be a host name' -e UCG_HOST=https://192.0.2.1/
@@ -163,7 +165,7 @@ reset_stub_backups
 start_stub_container good -e UMASK=077 -e NOTIFY_ON_SUCCESS=true
 in_log 'ucg-config-backup [0-9.]+ starting' || fail "the init step wrote no starting line"
 docker exec "$NAME" /usr/local/bin/ucg-backup >"$WORK/run.out" 2>&1 || { cat "$WORK/run.out" >&2; fail "the run against the stub failed"; }
-head -n 1 "$WORK/run.out" | grep -qE 'ucg-config-backup [0-9.]+ starting \(host=host\.docker\.internal:[0-9]+ site=good ' || fail "the run's first line is not the starting line: $(head -n 1 "$WORK/run.out")"
+head -n 1 "$WORK/run.out" | grep -qE '"event":"starting","version":"[0-9.]+","host":"host\.docker\.internal:[0-9]+","site":"good"' || fail "the run's first line is not the starting line: $(head -n 1 "$WORK/run.out")"
 if grep -q "$SECRET\|hook-secret" "$WORK/run.out"; then fail "the run's output shows a secret"; fi
 [[ $(find "$WORK/stub-backups" -name 'ucg-backup-*.unf' | wc -l) == 1 ]] || fail "no Network backup saved"
 [[ $(find "$WORK/stub-backups" -name 'ucg-system-backup-*.unifi' | wc -l) == 1 ]] || fail "no system backup saved"
@@ -180,8 +182,26 @@ set +e
 other=$(docker exec -u abc "$NAME" /usr/local/bin/ucg-backup 2>&1); other_rc=$?
 set -e
 [[ $other_rc != 0 ]] || fail "a run as abc exited 0"
-grep -q 'cannot open' <<<"$other" || fail "no clear message for a run as abc: $other"
+grep -q '"event":"lock_unavailable"' <<<"$other" || fail "no clear message for a run as abc: $other"
 if grep -q 'already running' <<<"$other"; then fail "a run as abc claimed another run was going"; fi
+docker rm -f "$NAME" >/dev/null
+
+echo "== a certificate pin: the right one works, a wrong one fails with both fingerprints"
+PIN=$(openssl x509 -in "$WORK/stub.crt" -noout -fingerprint -sha256 | cut -d= -f2)
+reset_stub_backups
+start_stub_container good -e VERIFY_SSL=true -e UCG_CERT_SHA256="$(tr 'A-F' 'a-f' <<<"$PIN")"
+docker exec "$NAME" /usr/local/bin/ucg-backup >"$WORK/run.out" 2>&1 || { cat "$WORK/run.out" >&2; fail "a run with the right pin failed"; }
+grep -qF "\"sha256\":\"$PIN\"" "$WORK/run.out" || fail "the console's fingerprint is not in the log"
+docker rm -f "$NAME" >/dev/null
+reset_stub_backups
+WRONG=$(printf 'AB:%.0s' $(seq 1 31))AB
+start_stub_container good -e UCG_CERT_SHA256="$WRONG"
+set +e
+docker exec "$NAME" /usr/local/bin/ucg-backup >"$WORK/run.out" 2>&1; rc=$?
+set -e
+[[ $rc != 0 ]] || fail "a wrong pin was accepted"
+grep -qF "Expected $WRONG, got $PIN" "$WORK/run.out" || fail "no message naming both fingerprints: $(cat "$WORK/run.out")"
+[[ -z $(find "$WORK/stub-backups" -name 'ucg-*') ]] || fail "a backup was saved despite a wrong pin"
 docker rm -f "$NAME" >/dev/null
 
 echo "== an error text with status 200 is no backup"
@@ -192,7 +212,7 @@ set +e
 docker exec "$NAME" /usr/local/bin/ucg-backup >"$WORK/run.out" 2>&1; rc=$?
 set -e
 [[ $rc != 0 ]] || fail "an error text was accepted as a backup"
-grep -q 'ERROR: Download is only' "$WORK/run.out" || fail "no error about the small download: $(cat "$WORK/run.out")"
+grep -q '"level":"ERROR","event":"run_failed","error":"Download is only' "$WORK/run.out" || fail "no error about the small download: $(cat "$WORK/run.out")"
 [[ -z $(find "$WORK/stub-backups" -name 'ucg-*') ]] || fail "an error text was kept as a backup"
 for _ in $(seq 1 10); do grep -q '"status": *"failed"' "$HOOKS" && break; sleep 1; done
 grep -q '"status": *"failed"' "$HOOKS" || fail "no failure webhook arrived"
@@ -206,7 +226,7 @@ docker exec -d "$NAME" sh -c '/usr/local/bin/ucg-backup >/proc/1/fd/1 2>&1'
 sleep 3
 for _ in 1 2 3; do
     skipped=$(docker exec "$NAME" /usr/local/bin/ucg-backup 2>&1 || true)
-    grep -q 'already running, skipping' <<<"$skipped" || fail "a run during the hanging one was not skipped: $skipped"
+    grep -q '"event":"run_skipped"' <<<"$skipped" || fail "a run during the hanging one was not skipped: $skipped"
 done
 for _ in $(seq 1 10); do grep -q '3 backup runs in a row were skipped' "$HOOKS" && break; sleep 1; done
 grep -q '3 backup runs in a row were skipped' "$HOOKS" || fail "no alarm after three skipped runs"
@@ -226,14 +246,14 @@ docker run -d --name "$NAME" -e PUID="$PUID" -e PGID="$PGID" \
     -e RUN_ON_START=true -e CRON_SCHEDULE='17 4 * * *' \
     -v "$WORK/config:/config" -v "$WORK/backups:/backups" "$IMAGE" >/dev/null
 for _ in $(seq 1 60); do
-    in_log 'ERROR: ' && break
+    in_log '"level":"ERROR"' && break
     sleep 2
 done
 
 in_log 'RUN_ON_START=true' || fail "no start-up run"
 in_log 'BASED ON IMAGES FROM LINUXSERVER\.IO' || fail "the start banner is not ours"
 if in_log 'Based on images from linuxserver\.io'; then fail "the base image's banner is still shown"; fi
-in_log 'ERROR: ' || fail "the start-up backup didn't run or didn't log its failure"
+in_log '"level":"ERROR"' || fail "the start-up backup didn't run or didn't log its failure"
 
 # The health check's own command.
 docker exec "$NAME" sh -c 'pgrep -f "^busybox crond" >/dev/null' || fail "crond is not running"
@@ -246,7 +266,7 @@ grep -qF 'run-parts /etc/periodic/daily' <<<"$crontab" || fail "the base image's
 docker exec -d "$NAME" sh -c 'exec 9>>/tmp/ucg-backup.lock; flock 9; sleep 10'
 sleep 1
 second=$(docker exec "$NAME" /usr/local/bin/ucg-backup 2>&1 || true)
-grep -q 'already running, skipping' <<<"$second" || fail "a second run was not skipped: $second"
+grep -q '"event":"run_skipped"' <<<"$second" || fail "a second run was not skipped: $second"
 
 [[ $(docker exec "$NAME" id -u abc) == "$PUID" ]] || fail "abc doesn't have PUID"
 [[ $(stat -c %u "$WORK/backups") == "$PUID" ]] || fail "/backups not owned by PUID"

@@ -58,6 +58,19 @@ if [[ -n ${value} && ! ${value} =~ ^[A-Za-z0-9_-]+$ ]]; then
     failed=1
 fi
 
+value=$(setting LOG_LEVEL)
+if [[ -n ${value} && ! ${value^^} =~ ^(DEBUG|INFO|WARNING|ERROR)$ ]]; then
+    echo "ERROR: LOG_LEVEL must be DEBUG, INFO, WARNING or ERROR, got '${value}'" >&2
+    failed=1
+fi
+
+# A SHA-256 fingerprint: 64 hex digits, colons optional.
+value=$(setting UCG_CERT_SHA256)
+if [[ -n ${value} && ! ${value//:/} =~ ^[0-9A-Fa-f]{64}$ ]]; then
+    echo "ERROR: UCG_CERT_SHA256 must be a SHA-256 fingerprint: 64 hex digits, with or without colons" >&2
+    failed=1
+fi
+
 value=$(setting WEBHOOK_FORMAT)
 if [[ -n ${value} && ${value,,} != text && ${value,,} != json ]]; then
     echo "ERROR: WEBHOOK_FORMAT must be 'text' or 'json', got '${value}'" >&2

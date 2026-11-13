@@ -9,15 +9,20 @@ files are saved per run: the Network application's backup (.unf) and the
 console's system backup for all applications and settings (.unifi).
 """
 import datetime
+import hashlib
+import json
 import os
 import pathlib
 import re
 import signal
+import socket
+import ssl
 import sys
 import time
 import urllib.parse
 
 import requests
+import requests.adapters
 import urllib3
 
 VERSION = "2.3.0"
@@ -58,6 +63,21 @@ WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "").strip()
 WEBHOOK_FORMAT = os.environ.get("WEBHOOK_FORMAT", "text").strip().lower() or "text"
 NOTIFY_ON_SUCCESS = read_bool("NOTIFY_ON_SUCCESS", "false")
 SYSTEM_BACKUP = read_bool("SYSTEM_BACKUP", "true")
+
+LOG_LEVELS = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40}
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "").strip().upper() or "INFO"  # rejected in main() if unknown
+
+
+def read_fingerprint(value):
+    # SHA-256 fingerprint as 64 hex digits, with or without colons, any case.
+    # Returns the plain lower-case form, "" when unset, None when malformed.
+    value = value.strip().replace(":", "").lower()
+    if not value or re.fullmatch(r"[0-9a-f]{64}", value):
+        return value
+    return None
+
+
+CERT_SHA256 = read_fingerprint(os.environ.get("UCG_CERT_SHA256", ""))
 # Seconds a whole run may take (login to logout). The per-request timeouts
 # only limit one wait each; a console that keeps answering slowly would hold
 # the lock for good and every later run would be skipped.
@@ -105,8 +125,19 @@ SYSTEM_BACKUP_TIMEOUT = (15, 300)
 BASE = f"https://{HOST}"
 
 
-def log(msg):
-    print(f"[{datetime.datetime.now():%Y-%m-%d %H:%M:%S}] {msg}", flush=True)
+class ConfigError(RuntimeError):
+    """A setting is missing or wrong; logged as `config_invalid`."""
+
+
+def log(event, level="INFO", always=False, **fields):
+    # One JSON object per line, as standards/runtime.md asks of Python apps:
+    # `ts` in local time with its offset (UTC prints as Z), `level`, `event`,
+    # then the fields. `always` is for the `starting` line, which LOG_LEVEL
+    # must not hide.
+    if not always and LOG_LEVELS[level] < LOG_LEVELS.get(LOG_LEVEL, LOG_LEVELS["INFO"]):
+        return
+    ts = datetime.datetime.now().astimezone().isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    print(json.dumps({"ts": ts, "level": level, "event": event, **fields}, ensure_ascii=False, separators=(",", ":")), flush=True)
 
 
 def redact_url(url):
@@ -146,7 +177,7 @@ def notify(ok, message, run):
         body = {"json": build_payload(ok, message, run)}
     else:
         if WEBHOOK_FORMAT != "text":
-            log(f"WARNING: unknown WEBHOOK_FORMAT '{WEBHOOK_FORMAT}', falling back to 'text'.")
+            log("webhook_format_unknown", "WARNING", format=WEBHOOK_FORMAT, fallback="text")
         body = {"data": f"UCG backup {'OK' if ok else 'FAILED'}: {message}".encode()}
 
     target = redact_url(WEBHOOK_URL)
@@ -158,7 +189,7 @@ def notify(ok, message, run):
             resp = requests.post(WEBHOOK_URL, timeout=10, **body)
         except INVALID_URL_ERRORS as exc:
             # A URL without a scheme can never work; retrying only delays the run.
-            log(f"WARNING: webhook URL is not valid ({type(exc).__name__}), not retrying.")
+            log("webhook_url_invalid", "WARNING", error=type(exc).__name__)
             return
         except Exception as exc:  # noqa: BLE001
             problem = type(exc).__name__
@@ -167,14 +198,14 @@ def notify(ok, message, run):
                 return
             problem = f"HTTP {resp.status_code}"
             if resp.status_code < 500:
-                log(f"WARNING: webhook to {target} rejected ({problem}), not retrying.")
+                log("webhook_rejected", "WARNING", target=target, problem=problem)
                 return
         if attempt < len(WEBHOOK_RETRY_DELAYS):
             delay = WEBHOOK_RETRY_DELAYS[attempt]
-            log(f"WARNING: webhook to {target} failed ({problem}), retrying in {delay}s...")
+            log("webhook_retry", "WARNING", target=target, problem=problem, delay_s=delay)
             time.sleep(delay)
         else:
-            log(f"WARNING: webhook to {target} failed ({problem}), giving up after {attempt + 1} attempts.")
+            log("webhook_failed", "WARNING", target=target, problem=problem, attempts=attempt + 1)
 
 
 def refresh_csrf(session, resp):
@@ -188,16 +219,20 @@ def refresh_csrf(session, resp):
 
 def effective_settings():
     # For the `starting` line: what this run uses, never the password or the
-    # webhook URL (only whether one is set).
-    def flag(value):
-        return "invalid" if value is None else str(value).lower()
-    return (
-        f"host={HOST or 'unset'} site={SITE} user={USERNAME or 'unset'} verify_ssl={flag(VERIFY_SSL)} "
-        f"system_backup={flag(SYSTEM_BACKUP)} retention_days={RETENTION_DAYS if RETENTION_DAYS is not None else 'invalid'} "
-        f"run_timeout={RUN_TIMEOUT if RUN_TIMEOUT is not None else 'invalid'} "
-        f"webhook={'set' if WEBHOOK_URL else 'off'} notify_on_success={flag(NOTIFY_ON_SUCCESS)} "
-        f"backup_dir={BACKUP_DIR}"
-    )
+    # webhook URL (only whether one is set). An unusable value shows as "invalid".
+    def shown(value, ok=True):
+        return value if ok and value is not None else "invalid"
+    return {
+        "host": HOST or None, "site": SITE, "user": USERNAME or None,
+        "verify_ssl": VERIFY_SSL if VERIFY_SSL is not None else "invalid",
+        "cert_pin": "set" if CERT_SHA256 else shown("off", CERT_SHA256 is not None),
+        "system_backup": SYSTEM_BACKUP if SYSTEM_BACKUP is not None else "invalid",
+        "retention_days": shown(RETENTION_DAYS), "run_timeout": shown(RUN_TIMEOUT),
+        "webhook": "set" if WEBHOOK_URL else "off",
+        "notify_on_success": NOTIFY_ON_SUCCESS if NOTIFY_ON_SUCCESS is not None else "invalid",
+        "backup_dir": str(BACKUP_DIR),
+        "log_level": LOG_LEVEL if LOG_LEVEL in LOG_LEVELS else "invalid",
+    }
 
 
 def start_deadline(seconds):
@@ -212,14 +247,59 @@ def start_deadline(seconds):
     signal.alarm(seconds)
 
 
+def colon_hex(fingerprint):
+    return ":".join(fingerprint[i:i + 2] for i in range(0, len(fingerprint), 2)).upper()
+
+
+def console_fingerprint():
+    # SHA-256 of the certificate the console presents, as 64 lower-case hex
+    # digits; None when no TLS connection comes up (login reports that).
+    # Nothing is sent over it, so the certificate is not verified here.
+    parts = urllib.parse.urlsplit(f"//{HOST}")
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    try:
+        with socket.create_connection((parts.hostname, parts.port or 443), timeout=5) as sock:
+            with context.wrap_socket(sock, server_hostname=parts.hostname) as tls:
+                return hashlib.sha256(tls.getpeercert(binary_form=True)).hexdigest()
+    except (OSError, ValueError):
+        return None
+
+
+class PinnedAdapter(requests.adapters.HTTPAdapter):
+    # Every connection of the session must present the pinned certificate
+    # (urllib3 compares the SHA-256 after the handshake).
+    def init_poolmanager(self, *args, **kwargs):
+        super().init_poolmanager(*args, assert_fingerprint=CERT_SHA256, **kwargs)
+
+
+def check_console_certificate(session):
+    # Logs the console's fingerprint so it can be copied into
+    # UCG_CERT_SHA256, and with a pin set refuses any other certificate.
+    actual = console_fingerprint()
+    if actual:
+        log("console_certificate", sha256=colon_hex(actual), pinned=bool(CERT_SHA256))
+    if not CERT_SHA256:
+        return
+    if actual and actual != CERT_SHA256:
+        raise RuntimeError(
+            f"The console's certificate does not match UCG_CERT_SHA256. Expected {colon_hex(CERT_SHA256)}, "
+            f"got {colon_hex(actual)}. If the certificate was renewed on purpose, set the new fingerprint."
+        )
+    # The pin replaces the CA and host name checks, whatever VERIFY_SSL says.
+    session.verify = False
+    session.mount("https://", PinnedAdapter())
+
+
 def main(run):
-    log(f"ucg-config-backup {VERSION} starting ({effective_settings()})")
+    log("starting", always=True, version=VERSION, **effective_settings())
     missing = [
         name for name, value in (("UCG_HOST", HOST), ("UCG_USERNAME", os.environ.get("UCG_USERNAME")), ("UCG_PASSWORD", os.environ.get("UCG_PASSWORD")))
         if not value
     ]
     if missing:
-        raise RuntimeError(f"Missing required setting(s): {', '.join(missing)}")
+        raise ConfigError(f"Missing required setting(s): {', '.join(missing)}")
     bad_bools = [
         name for name, value in (
             ("VERIFY_SSL", VERIFY_SSL), ("NOTIFY_ON_SUCCESS", NOTIFY_ON_SUCCESS), ("SYSTEM_BACKUP", SYSTEM_BACKUP),
@@ -227,25 +307,30 @@ def main(run):
         if value is None
     ]
     if bad_bools:
-        raise RuntimeError(f"{' and '.join(bad_bools)} must be 'true' or 'false'")
+        raise ConfigError(f"{' and '.join(bad_bools)} must be 'true' or 'false'")
+    if LOG_LEVEL not in LOG_LEVELS:
+        raise ConfigError(f"LOG_LEVEL must be one of {', '.join(LOG_LEVELS)}, got '{LOG_LEVEL}'")
+    if CERT_SHA256 is None:
+        raise ConfigError("UCG_CERT_SHA256 must be a SHA-256 fingerprint: 64 hex digits, with or without colons")
     if "/" in HOST:  # also covers a leading https://
-        raise RuntimeError("UCG_HOST must be a host name or IP address (optionally with :port), without https:// or a path")
+        raise ConfigError("UCG_HOST must be a host name or IP address (optionally with :port), without https:// or a path")
     if RETENTION_DAYS is None:
-        raise RuntimeError(
+        raise ConfigError(
             f"RETENTION_DAYS must be a whole number of 0 or more, got '{os.environ['RETENTION_DAYS']}'"
         )
     if RUN_TIMEOUT is None:
-        raise RuntimeError(f"RUN_TIMEOUT must be a whole number of seconds, 1 or more, got '{os.environ['RUN_TIMEOUT']}'")
+        raise ConfigError(f"RUN_TIMEOUT must be a whole number of seconds, 1 or more, got '{os.environ['RUN_TIMEOUT']}'")
     if not SITE_RE.fullmatch(SITE):
-        raise RuntimeError("UCG_SITE may only contain letters, digits, '-' and '_' (it is the site's internal name, 'default' unless you changed it)")
+        raise ConfigError("UCG_SITE may only contain letters, digits, '-' and '_' (it is the site's internal name, 'default' unless you changed it)")
 
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     start_deadline(RUN_TIMEOUT)
 
     session = requests.Session()
     session.verify = VERIFY_SSL
+    check_console_certificate(session)
 
-    log(f"Logging in to {HOST} as {USERNAME}...")
+    log("login", "DEBUG", host=HOST, user=USERNAME)
     login(session)
     # Logged out on every path, so a failed run leaves no session open on
     # the console.
@@ -260,8 +345,8 @@ def main(run):
         apply_retention(run)
     except OSError as exc:  # e.g. the folder can't be listed
         run["retention_warnings"] = run.get("retention_warnings", 0) + 1  # the listing itself failed
-        log(f"WARNING: retention failed: {exc}")
-    log("Backup completed successfully.")
+        log("retention_failed", "WARNING", error=str(exc))
+    log("backup_completed", filename=run["filename"], system_filename=run["system_filename"])
 
 
 def logout(session):
@@ -327,12 +412,12 @@ def backup_download_path(resp):
 
 
 def save_backup(session, run):
-    log(f"Triggering backup on site '{SITE}'...")
+    log("backup_triggered", "DEBUG", site=SITE)
     resp = request_backup(session)
     if resp.status_code == 403:
         # A stale CSRF token or session gives a 403 as well: log in again
         # once, with a fresh session and token, before giving up.
-        log("Backup command rejected (403), logging in again and retrying once...")
+        log("backup_rejected_retrying", "WARNING", status=403)
         logout(session)  # the first session would otherwise stay open on the console
         session.cookies.clear()
         login(session)
@@ -354,7 +439,7 @@ def save_backup(session, run):
     else:
         download_url = f"{BASE}/proxy/network/{download_path}"
 
-    log(f"Downloading backup from {download_url}...")
+    log("download_started", "DEBUG", url=download_url)
     dl = session.get(download_url, timeout=60)
     dl.raise_for_status()
     filename = f"ucg-backup-{datetime.datetime.now():%Y%m%d-%H%M%S}.unf"
@@ -374,7 +459,7 @@ def save_system_backup(session, run):
     # The "Download Backup" button of the console itself ("Backup for All
     # Applications and Settings"). The Network backup above is already saved
     # when this fails.
-    log("Downloading the system backup (all applications and settings)...")
+    log("system_download_started", "DEBUG")
     dl = session.get(f"{BASE}/api/backup/download", timeout=SYSTEM_BACKUP_TIMEOUT)
     if dl.status_code in (401, 403, 404):
         if dl.status_code == 404:
@@ -457,7 +542,7 @@ def store_download(dl, filename):
         write_durably(partial, target, dl.content)
     finally:
         partial.unlink(missing_ok=True)
-    log(f"Saved {target} ({len(dl.content)} bytes).")
+    log("backup_saved", file=filename, size_bytes=len(dl.content))
     return filename
 
 
@@ -474,7 +559,7 @@ def expire(f, cutoff, run):
         pass
     except OSError as exc:
         run["retention_warnings"] += 1
-        log(f"WARNING: could not remove {f.name}: {exc}")
+        log("remove_failed", "WARNING", file=f.name, error=str(exc))
     return None
 
 
@@ -500,7 +585,7 @@ def apply_retention(run):
     for pattern in (".ucg-backup-*.unf.partial", ".ucg-system-backup-*.partial"):
         for f in BACKUP_DIR.glob(pattern):
             if expire(f, now - PARTIAL_MAX_AGE_S, run) is not None:
-                log(f"Removed {f.name} left behind by an interrupted run.")
+                log("partial_removed", file=f.name)
 
     if RETENTION_DAYS > 0:
         cutoff = now - RETENTION_DAYS * 86400
@@ -511,7 +596,7 @@ def apply_retention(run):
         ]
         sizes = [size for size in sizes if size is not None]
         if sizes:
-            log(f"Retention: removed {len(sizes)} backup(s) older than {RETENTION_DAYS} days, freed {sum(sizes)} bytes.")
+            log("retention_done", removed=len(sizes), older_than_days=RETENTION_DAYS, freed_bytes=sum(sizes))
     run["backups_kept"] = sum(1 for _ in BACKUP_DIR.glob("ucg-backup-*.unf"))
     run["system_backups_kept"] = sum(1 for _ in BACKUP_DIR.glob("ucg-system-backup-*"))
 
@@ -543,7 +628,7 @@ if __name__ == "__main__":
             f"{count} backup runs in a row were skipped because an earlier run is still going. "
             "It may be stuck; it ends itself after RUN_TIMEOUT. If this repeats, restart the container."
         )
-        log(f"ERROR: {message}")
+        log("runs_skipped", "ERROR", skipped=count, error=message)
         notify(False, message, run)
         sys.exit(1)
     try:
@@ -552,7 +637,7 @@ if __name__ == "__main__":
         finally:
             signal.alarm(0)  # the deadline is for the backup, not for the webhook after it
     except Exception as exc:  # noqa: BLE001 - top-level guard, must always notify+exit non-zero
-        log(f"ERROR: {exc}")
+        log("config_invalid" if isinstance(exc, ConfigError) else "run_failed", "ERROR", error=str(exc) or type(exc).__name__)
         notify(False, str(exc) or type(exc).__name__, run)
         sys.exit(1)
     if NOTIFY_ON_SUCCESS:

@@ -22,6 +22,10 @@ configuration, so the following are of particular interest:
   the container environment in `/run/s6/container_environment` inside the
   container, as in every linuxserver.io image; that copy is known and
   readable only from inside the container or by root on the Docker host.
+- a console that is not the one you configured receiving the login: the
+  certificate is not checked by default (`VERIFY_SSL=false`, UniFi OS
+  ships a self-signed one); `UCG_CERT_SHA256` pins the console's certificate
+  and refuses any other before the password is sent.
 - backup files readable by users they shouldn't be readable by
 - path handling that could write or delete outside `/backups`
 
