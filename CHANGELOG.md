@@ -5,6 +5,49 @@ All notable changes to this project are listed here. Versions follow
 upgrading (a renamed or removed setting, a different folder layout, a changed
 webhook payload) only comes with a new major version.
 
+## [Unreleased]
+
+### Fixed
+- A download that is not a backup is no longer kept as one. An error text
+  the console sent with status 200 (plain text, or no content type) used to
+  be saved as a 20-byte "backup" and the run reported success. Downloads
+  under 1 KiB, readable text and transfers cut short now fail the run.
+- Retention never removes the newest three backups of each kind any more,
+  however old they are, so weeks of failed runs can't delete the last good
+  ones. Files under 1 KiB left by earlier versions don't count as backups.
+- A run that hangs (a stuck download) no longer blocks all later runs
+  without a word: a run is stopped after `RUN_TIMEOUT` seconds (30 minutes
+  by default), and the third skipped run in a row sends a failed
+  notification.
+- `docker exec -u abc … ucg-backup` said "already running" and exited 0
+  because it couldn't open the lock. It now says to run it as root and
+  exits 1.
+- The download address from the console must be a path on the console
+  itself; `null`, a full URL, `..` or blanks are refused.
+- Blanks around `UCG_HOST`, `UCG_SITE` and `WEBHOOK_URL` are trimmed, as the
+  start-up check already did. A value that passed the check no longer fails
+  every run.
+- `UCG_SITE` may only have letters, digits, `-` and `_`; anything else stops
+  the container (it went unchecked into a URL path).
+- The console's answer is no longer quoted in the log and the webhook when
+  it has no download URL.
+- The first session is closed before the login that retries a rejected
+  backup command (403).
+- The backup file is flushed to disk before it is renamed into place.
+- The first line of the log is `starting` with the version and the settings
+  in use (never the password or the webhook URL), also when a setting is
+  wrong; before, settings errors came first and the line had no settings.
+
+### Added
+- `RUN_TIMEOUT` (`1800` seconds by default): the longest one run may take.
+
+### Docs
+- The README says how to keep backups from other users (`UMASK=027` or
+  `077`), documents `LOCAL_BACKUP_DIR` and the keep-the-newest-three rule.
+
+### Changed
+- The base image digest is the current `baseimage-alpine:3.24`.
+
 ## [2.3.0] - 2026-11-12
 
 ### Upgrading

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Smoke test of the image: settings check, cron, health check command,
 # ownership, and that a backup runs as PUID with the settings and logs to
-# the container log. There is no console to talk to, so the backup itself
-# fails to connect; that failure must show up in the log.
+# the container log. A stub console (tests/stub_console.py) answers the
+# backup runs; without one, the start-up run fails to connect and that
+# failure must show up in the log.
 # Usage: tests/smoke.sh <image>
 set -euo pipefail
 
@@ -14,7 +15,9 @@ SECRET=smoke-test-password-$$
 PUID=$(id -u); PGID=$(id -g)
 [[ $PUID != 0 ]] || { PUID=1000; PGID=1000; }
 
+STUB_PID=
 cleanup() {
+    [[ -z $STUB_PID ]] || kill "$STUB_PID" 2>/dev/null || true
     docker rm -f "$NAME" >/dev/null 2>&1 || true
     # The container writes some files as root (e.g. the crontab), which the
     # calling user can't remove; clean up through a container.
@@ -126,6 +129,90 @@ docker run -d --name "$NAME" -e PUID="$PUID" -e PGID="$PGID" -e UCG_HOST=x -e UC
     -e RUN_ON_START=TRUE -v "$WORK/fake-backup.py:/usr/local/bin/backup.py:ro" "$IMAGE" >/dev/null
 wait_for_log 'FAKE-RUN'
 in_log "FAKE-RUN uid=$PUID home=/tmp" || fail "the wrapper did not run Python as PUID with HOME=/tmp"
+docker rm -f "$NAME" >/dev/null
+
+# --- runs against a stub console ----------------------------------------------
+# The stub listens on the host; the container reaches it as host.docker.internal.
+free_port() { python3 -c 'import socket; s = socket.socket(); s.bind(("", 0)); print(s.getsockname()[1])'; }
+TLS_PORT=$(free_port); HOOK_PORT=$(free_port)
+HOOKS="$WORK/hooks.log"; : > "$HOOKS"
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=stub \
+    -keyout "$WORK/stub.key" -out "$WORK/stub.crt" >/dev/null 2>&1
+python3 "$(dirname "$0")/stub_console.py" "$TLS_PORT" "$HOOK_PORT" "$HOOKS" "$WORK/stub.crt" "$WORK/stub.key" &
+STUB_PID=$!
+for _ in $(seq 1 20); do
+    python3 -c "import socket; socket.create_connection(('127.0.0.1', $TLS_PORT), 1)" 2>/dev/null && break
+    sleep 0.5
+done
+
+# A container that waits (no start-up run) with the stub as its console.
+# Arguments: the stub's site, then more docker run arguments.
+start_stub_container() {
+    local site=$1; shift
+    docker run -d --name "$NAME" --add-host host.docker.internal:host-gateway \
+        -e PUID="$PUID" -e PGID="$PGID" -e RUN_ON_START=false \
+        -e UCG_HOST="host.docker.internal:$TLS_PORT" -e UCG_USERNAME=smoke -e UCG_PASSWORD="$SECRET" \
+        -e UCG_SITE="$site" -e WEBHOOK_URL="http://host.docker.internal:$HOOK_PORT/hook-secret" \
+        -e WEBHOOK_FORMAT=json "$@" -v "$WORK/stub-backups:/backups" "$IMAGE" >/dev/null
+    wait_for_log '\[ls\.io-init\] done'
+}
+reset_stub_backups() { docker run --rm --entrypoint sh -v "$WORK:/w" "$IMAGE" -c 'rm -rf /w/stub-backups; mkdir /w/stub-backups; chown '"$PUID:$PGID"' /w/stub-backups'; }
+
+echo "== a run against the stub saves both files, as PUID, with the UMASK"
+reset_stub_backups
+start_stub_container good -e UMASK=077 -e NOTIFY_ON_SUCCESS=true
+in_log 'ucg-config-backup [0-9.]+ starting' || fail "the init step wrote no starting line"
+docker exec "$NAME" /usr/local/bin/ucg-backup >"$WORK/run.out" 2>&1 || { cat "$WORK/run.out" >&2; fail "the run against the stub failed"; }
+head -n 1 "$WORK/run.out" | grep -qE 'ucg-config-backup [0-9.]+ starting \(host=host\.docker\.internal:[0-9]+ site=good ' || fail "the run's first line is not the starting line: $(head -n 1 "$WORK/run.out")"
+if grep -q "$SECRET\|hook-secret" "$WORK/run.out"; then fail "the run's output shows a secret"; fi
+[[ $(find "$WORK/stub-backups" -name 'ucg-backup-*.unf' | wc -l) == 1 ]] || fail "no Network backup saved"
+[[ $(find "$WORK/stub-backups" -name 'ucg-system-backup-*.unifi' | wc -l) == 1 ]] || fail "no system backup saved"
+[[ $(find "$WORK/stub-backups" -name '.*partial' | wc -l) == 0 ]] || fail "a partial file was left"
+for f in "$WORK"/stub-backups/ucg-*; do
+    [[ $(stat -c '%u' "$f") == "$PUID" ]] || fail "$f is not owned by PUID"
+    [[ $(stat -c '%a' "$f") == 600 ]] || fail "$f is not 600 with UMASK=077 ($(stat -c '%a' "$f"))"
+done
+for _ in $(seq 1 10); do grep -q '"status": *"ok"' "$HOOKS" && break; sleep 1; done
+grep -q '"status": *"ok"' "$HOOKS" || fail "no success webhook arrived"
+
+echo "== a user other than root gets a clear message, not 'already running'"
+set +e
+other=$(docker exec -u abc "$NAME" /usr/local/bin/ucg-backup 2>&1); other_rc=$?
+set -e
+[[ $other_rc != 0 ]] || fail "a run as abc exited 0"
+grep -q 'cannot open' <<<"$other" || fail "no clear message for a run as abc: $other"
+if grep -q 'already running' <<<"$other"; then fail "a run as abc claimed another run was going"; fi
+docker rm -f "$NAME" >/dev/null
+
+echo "== an error text with status 200 is no backup"
+reset_stub_backups
+: > "$HOOKS"
+start_stub_container err200
+set +e
+docker exec "$NAME" /usr/local/bin/ucg-backup >"$WORK/run.out" 2>&1; rc=$?
+set -e
+[[ $rc != 0 ]] || fail "an error text was accepted as a backup"
+grep -q 'ERROR: Download is only' "$WORK/run.out" || fail "no error about the small download: $(cat "$WORK/run.out")"
+[[ -z $(find "$WORK/stub-backups" -name 'ucg-*') ]] || fail "an error text was kept as a backup"
+for _ in $(seq 1 10); do grep -q '"status": *"failed"' "$HOOKS" && break; sleep 1; done
+grep -q '"status": *"failed"' "$HOOKS" || fail "no failure webhook arrived"
+docker rm -f "$NAME" >/dev/null
+
+echo "== a hanging download is stopped, and skipped runs raise an alarm"
+reset_stub_backups
+: > "$HOOKS"
+start_stub_container hang -e RUN_TIMEOUT=25
+docker exec -d "$NAME" sh -c '/usr/local/bin/ucg-backup >/proc/1/fd/1 2>&1'
+sleep 3
+for _ in 1 2 3; do
+    skipped=$(docker exec "$NAME" /usr/local/bin/ucg-backup 2>&1 || true)
+    grep -q 'already running, skipping' <<<"$skipped" || fail "a run during the hanging one was not skipped: $skipped"
+done
+for _ in $(seq 1 10); do grep -q '3 backup runs in a row were skipped' "$HOOKS" && break; sleep 1; done
+grep -q '3 backup runs in a row were skipped' "$HOOKS" || fail "no alarm after three skipped runs"
+[[ $(grep -c '3 backup runs in a row' "$HOOKS") == 1 ]] || fail "the alarm was sent more than once"
+for _ in $(seq 1 40); do in_log 'run took longer than RUN_TIMEOUT' && break; sleep 1; done
+in_log 'run took longer than RUN_TIMEOUT' || fail "the hanging run was not stopped by RUN_TIMEOUT"
 docker rm -f "$NAME" >/dev/null
 
 echo "== start"

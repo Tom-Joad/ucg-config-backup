@@ -43,14 +43,14 @@ jobs:
           python-version: "3.14"
 
       - name: Install
-        run: pip install -r requirements.txt pytest
+        run: pip install -r requirements.txt pytest==9.2.0
 
       - name: Run tests
         run: pytest -q
 
       - name: Scan dependencies for known vulnerabilities
         run: |
-          pip install pip-audit
+          pip install pip-audit==2.10.1
           pip-audit --progress-spinner off --requirement requirements.txt
 
       - name: Shellcheck
