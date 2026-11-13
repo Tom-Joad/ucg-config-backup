@@ -682,7 +682,7 @@ def test_a_run_that_takes_too_long_is_stopped(settings, monkeypatch):
     monkeypatch.setattr(backup, "RUN_TIMEOUT", 1)
     started = time.monotonic()
     try:
-        with pytest.raises(backup.RunTimeout, match="RUN_TIMEOUT"):
+        with pytest.raises(RuntimeError, match="RUN_TIMEOUT"):
             backup.main(new_run())
     finally:
         signal_off()

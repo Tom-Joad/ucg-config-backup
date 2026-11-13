@@ -200,15 +200,11 @@ def effective_settings():
     )
 
 
-class RunTimeout(RuntimeError):
-    pass
-
-
 def start_deadline(seconds):
     # SIGALRM interrupts a blocked read, which a requests timeout does not
     # (it is per wait, so a trickling download never trips it).
     def expired(signum, frame):
-        raise RunTimeout(
+        raise RuntimeError(
             f"The run took longer than RUN_TIMEOUT ({seconds} s) and was stopped. "
             "Is the console answering slowly, or the download stuck?"
         )
@@ -218,7 +214,10 @@ def start_deadline(seconds):
 
 def main(run):
     log(f"ucg-config-backup {VERSION} starting ({effective_settings()})")
-    missing = [name for name in ("UCG_HOST", "UCG_USERNAME", "UCG_PASSWORD") if not (HOST if name == "UCG_HOST" else os.environ.get(name))]
+    missing = [
+        name for name, value in (("UCG_HOST", HOST), ("UCG_USERNAME", os.environ.get("UCG_USERNAME")), ("UCG_PASSWORD", os.environ.get("UCG_PASSWORD")))
+        if not value
+    ]
     if missing:
         raise RuntimeError(f"Missing required setting(s): {', '.join(missing)}")
     bad_bools = [
@@ -491,8 +490,8 @@ def files_to_expire(pattern):
             continue
         entries.append((st.st_mtime, st.st_size >= MIN_BACKUP_BYTES, f))
     entries.sort(key=lambda e: e[0], reverse=True)
-    protected = [e for e in entries if e[1]][:KEEP_NEWEST]
-    return [f for _, _, f in entries if all(f != p[2] for p in protected)]
+    protected = set(list(f for _, good, f in entries if good)[:KEEP_NEWEST])
+    return [f for _, _, f in entries if f not in protected]
 
 
 def apply_retention(run):
@@ -505,10 +504,11 @@ def apply_retention(run):
 
     if RETENTION_DAYS > 0:
         cutoff = now - RETENTION_DAYS * 86400
-        sizes = []
-        for pattern in ("ucg-backup-*.unf", "ucg-system-backup-*"):
-            for f in files_to_expire(pattern):
-                sizes.append(expire(f, cutoff, run))
+        sizes = [
+            expire(f, cutoff, run)
+            for pattern in ("ucg-backup-*.unf", "ucg-system-backup-*")
+            for f in files_to_expire(pattern)
+        ]
         sizes = [size for size in sizes if size is not None]
         if sizes:
             log(f"Retention: removed {len(sizes)} backup(s) older than {RETENTION_DAYS} days, freed {sum(sizes)} bytes.")
@@ -547,10 +547,11 @@ if __name__ == "__main__":
         notify(False, message, run)
         sys.exit(1)
     try:
-        main(run)
-        signal.alarm(0)  # the deadline is for the backup, not for the webhook after it
+        try:
+            main(run)
+        finally:
+            signal.alarm(0)  # the deadline is for the backup, not for the webhook after it
     except Exception as exc:  # noqa: BLE001 - top-level guard, must always notify+exit non-zero
-        signal.alarm(0)
         log(f"ERROR: {exc}")
         notify(False, str(exc) or type(exc).__name__, run)
         sys.exit(1)
