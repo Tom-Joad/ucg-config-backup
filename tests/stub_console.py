@@ -77,12 +77,22 @@ def hook_handler(log_path):
     return Hook
 
 
-if __name__ == "__main__":
-    tls_port, hook_port, hook_log, cert, key = sys.argv[1:6]
-    tls = http.server.ThreadingHTTPServer(("0.0.0.0", int(tls_port)), Console)
+class QuietServer(http.server.ThreadingHTTPServer):
+    def handle_error(self, request, client_address):
+        pass  # a client that hangs up after the handshake (a fingerprint probe)
+
+
+def make_console_server(port, cert, key, host="0.0.0.0"):
+    tls = QuietServer((host, int(port)), Console)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(cert, key)
     tls.socket = context.wrap_socket(tls.socket, server_side=True)
+    return tls
+
+
+if __name__ == "__main__":
+    tls_port, hook_port, hook_log, cert, key = sys.argv[1:6]
+    tls = make_console_server(tls_port, cert, key)
     hook = http.server.ThreadingHTTPServer(("0.0.0.0", int(hook_port)), hook_handler(hook_log))
     threading.Thread(target=hook.serve_forever, daemon=True).start()
     tls.serve_forever()

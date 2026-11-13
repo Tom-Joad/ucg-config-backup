@@ -9,6 +9,24 @@ umask "${UMASK:-022}"
 # One backup at a time: the start-up run and a scheduled one, or a manual
 # `docker exec`, must not log in to the console side by side. The lock is
 # held on fd 9 through the exec below.
+# The wrapper's own messages are JSON lines like backup.py's (standards/runtime.md).
+log() { # level event [field=value ...]; values are plain text without quotes
+    local level=$1 event=$2 tz fields="" pair value
+    shift 2
+    tz=$(date +%z)
+    if [[ ${tz} == +0000 ]]; then tz=Z; else tz="${tz:0:3}:${tz:3:2}"; fi
+    for pair in "$@"; do
+        value=${pair#*=}
+        if [[ ${value} =~ ^[0-9]+$ ]]; then
+            fields+=",\"${pair%%=*}\":${value}"
+        else
+            value=${value//\\/\\\\}
+            fields+=",\"${pair%%=*}\":\"${value//\"/\\\"}\""
+        fi
+    done
+    printf '{"ts":"%s.000%s","level":"%s","event":"%s"%s}\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "${tz}" "${level}" "${event}" "${fields}"
+}
+
 LOCK=/tmp/ucg-backup.lock
 SKIPS=/tmp/ucg-backup.skips
 # Skipped runs in a row after which a failed webhook is sent: a run that
@@ -18,7 +36,7 @@ SKIPS_BEFORE_ALERT=3
 # The lock belongs to root. `docker exec -u abc` can't open it, and must not
 # be told that "a backup is already running".
 if ! exec 9>>"${LOCK}"; then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: cannot open ${LOCK} as user $(id -un). Run this as root (docker exec without -u): it switches to PUID/PGID itself." >&2
+    log ERROR lock_unavailable "user=$(id -un)" "error=cannot open ${LOCK}. Run this as root (docker exec without -u): it switches to PUID/PGID itself." >&2
     exit 1
 fi
 
@@ -33,10 +51,10 @@ if [[ -z ${LSIO_NON_ROOT_USER:-} ]] && [[ $(id -u) == 0 ]]; then
 fi
 
 if ! flock -n 9; then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: a backup is already running, skipping this one."
     skips=$(cat "${SKIPS}" 2>/dev/null || true)
     [[ ${skips} =~ ^[0-9]+$ ]] || skips=0
     skips=$((skips + 1))
+    log WARNING run_skipped "reason=a backup is already running, skipping this one" "skipped=${skips}"
     echo "${skips}" >"${SKIPS}"
     # Only the run that reaches the limit reports, not every one after it.
     if (( skips == SKIPS_BEFORE_ALERT )); then

@@ -234,6 +234,8 @@ with it set.
 | `VERIFY_SSL` | | `false` | `true` or `false` (any case; anything else stops the container): verify the console's TLS certificate (UniFi OS ships a self-signed cert by default) |
 | `CRON_SCHEDULE` | | `0 3 * * *` | Cron expression for the backup run (five fields, each inside its range, separated by spaces or tabs; anything else stops the container with an `ERROR:` line) |
 | `RETENTION_DAYS` | | `30` | Delete local backups older than N days (`0` = keep forever; anything but a whole number of 0 or more stops the container). The newest three backups of each kind are always kept |
+| `UCG_CERT_SHA256` | | – | SHA-256 fingerprint of the console's TLS certificate (64 hex digits, colons optional, any case). When set, every connection must present exactly that certificate, whatever `VERIFY_SSL` says; a mismatch fails the run. See [Pinning the console's certificate](#pinning-the-consoles-certificate) |
+| `LOG_LEVEL` | | `INFO` | `DEBUG`, `INFO`, `WARNING` or `ERROR` (any case; anything else stops the container). `DEBUG` adds the steps of a run (login, trigger, download). The `starting` line is always logged |
 | `RUN_TIMEOUT` | | `1800` | Seconds one run may take before it is stopped as stuck (a whole number, 1 or more) |
 | `LOCAL_BACKUP_DIR` | | `/backups` | Folder inside the container the backups are written to. Leave it alone and map the host folder to `/backups`; change it only if you must, then map your volume to the new path |
 | `RUN_ON_START` | | `true` | `true` or `false`: run a backup immediately when the container starts |
@@ -373,6 +375,10 @@ belongs to someone else is left alone.
   who answers, so someone in your LAN who can intercept the traffic could
   capture the password. If you've installed a trusted certificate on the
   console, set `VERIFY_SSL=true`.
+* `UCG_CERT_SHA256` pins the console's certificate and closes that gap,
+  see [Pinning the console's certificate](#pinning-the-consoles-certificate).
+  The pin replaces the certificate-authority and host-name checks: a
+  certificate renewed on the console needs the new fingerprint here.
 * Use a dedicated local admin account scoped to what backups need — don't
   reuse your primary login.
 * The backup files hold the console's whole configuration. With the
@@ -416,9 +422,56 @@ belongs to someone else is left alone.
   answered the download with a web page, usually because the session
   ended or the firmware changed the download path. Run it again; if it
   stays, open an issue with the log lines.
-* **`WARNING: a backup is already running, skipping this one.`** — a
-  scheduled or manual run started while another one was still going.
-  Nothing to do.
+* **`run_skipped` (`a backup is already running`)** — a scheduled or manual
+  run started while another one was still going. Nothing to do.
+* **`The console's certificate does not match UCG_CERT_SHA256`** — the
+  console presents another certificate than the pinned one. If you renewed
+  or replaced it, copy the new fingerprint from the message (or the
+  `console_certificate` log line) into `UCG_CERT_SHA256`; if you did not,
+  someone else may be answering at that address.
+
+## Pinning the console's certificate
+
+UniFi OS consoles ship a self-signed certificate, so `VERIFY_SSL=true` only
+works once you have installed a trusted one. Instead, you can pin the
+console's own certificate: set `UCG_CERT_SHA256` to its SHA-256
+fingerprint, and the run fails unless the console presents exactly that
+certificate. It works independently of `VERIFY_SSL` (a self-signed
+console with a pin is the intended use), and the login only goes out after
+the check.
+
+Get the fingerprint from the log: every run logs a `console_certificate`
+line with the `sha256` the console presents (check it is really your
+console, for example in the browser's certificate details, before you pin
+it), or ask `openssl`:
+
+```bash
+openssl s_client -connect 192.168.1.1:443 </dev/null 2>/dev/null \
+  | openssl x509 -noout -fingerprint -sha256
+```
+
+Colons and case don't matter: `AB:CD:...` and `abcd...` are the same. A
+value that is not 64 hex digits stops the container at start with an
+`ERROR:` line. The pin has to be updated when the console's certificate is
+renewed or replaced.
+
+## Logging
+
+Everything goes to the container log (`docker logs ucg-config-backup`),
+one JSON object per line, as in the other containers of this family:
+
+```json
+{"ts":"2026-11-13T03:00:00.123+01:00","level":"INFO","event":"backup_saved","file":"ucg-backup-20261113-030000.unf","size_bytes":123456}
+```
+
+`ts` is local time (the container's `TZ`) with milliseconds and offset
+(`Z` for UTC), `event` a short stable name, the other keys depend on the
+event. The first line of every run is `starting` with the version and the
+settings in use (never the password; the webhook URL only as `set` or
+`off`). Failures are `level` `ERROR` with the reason in `error`: `run_failed`
+for a failed run, `config_invalid` for a wrong setting. `LOG_LEVEL` filters.
+The container's start-up (settings check, schedule, the base image's
+banner) is plain text before the first run.
 
 ## Support info
 

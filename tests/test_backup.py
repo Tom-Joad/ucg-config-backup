@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
+import re
+import shutil
+import ssl
 import subprocess
 import sys
+import threading
 import time
 
 import pytest
@@ -43,6 +49,7 @@ class FakeSession:
         self.headers = {}
         self.cookies = {}
         self.verify = None
+        self.mounted = {}
         self.calls = []
         self.backup_status = backup_status
         self.download_type = download_type
@@ -51,6 +58,9 @@ class FakeSession:
         self.backup_statuses = list(backup_statuses or [backup_status])
         self.system_status = system_status
         self.system_headers = {"content-type": "application/octet-stream"} if system_headers is None else system_headers
+
+    def mount(self, prefix, adapter):
+        self.mounted[prefix] = adapter
 
     def post(self, url, **kwargs):
         self.calls.append(("POST", url))
@@ -77,6 +87,7 @@ def settings(tmp_path, monkeypatch):
     monkeypatch.setattr(backup, "BASE", "https://192.0.2.1")
     monkeypatch.setattr(backup, "BACKUP_DIR", tmp_path)
     monkeypatch.setattr(backup, "RETENTION_DAYS", 30)
+    monkeypatch.setattr(backup, "console_fingerprint", lambda: None)  # 192.0.2.1 is not reachable
     return tmp_path
 
 
@@ -237,7 +248,7 @@ def test_retention_removes_stale_partials_and_logs_freed_space(settings, capsys)
     assert fresh.exists()
     assert not old.exists()
     assert run["backups_kept"] == 0
-    assert "freed 5 bytes" in capsys.readouterr().out
+    assert '"freed_bytes":5' in capsys.readouterr().out
 
 
 class HtmlResponse(FakeResponse):
@@ -309,9 +320,12 @@ def test_a_retention_error_does_not_fail_the_run(settings, monkeypatch, capsys):
     run = new_run()
     backup.main(run)
     out = capsys.readouterr().out
-    assert "WARNING: could not remove ucg-backup-20200101-000000.unf: read-only share" in out
-    assert "ERROR" not in out
-    assert "Backup completed successfully." in out
+    events = [json.loads(line) for line in out.splitlines()]
+    removal = next(e for e in events if e["event"] == "remove_failed")
+    assert removal["level"] == "WARNING" and removal["file"] == "ucg-backup-20200101-000000.unf"
+    assert "read-only share" in removal["error"]
+    assert not [e for e in events if e["level"] == "ERROR"]
+    assert events[-1]["event"] == "backup_completed"
     assert run["filename"] and run["retention_warnings"] == 1
     assert run["backups_kept"] == 2
     assert run["system_backups_kept"] == 1
@@ -388,7 +402,8 @@ def test_notify_does_not_retry_an_invalid_url(monkeypatch, capsys, error):
     out = capsys.readouterr().out
     assert len(calls) == 1
     assert sleeps == []
-    assert f"webhook URL is not valid ({error.__name__})" in out
+    event = json.loads(out.splitlines()[0])
+    assert event["event"] == "webhook_url_invalid" and event["error"] == error.__name__
     assert "secret" not in out
 
 
@@ -657,9 +672,11 @@ def test_the_starting_line_comes_first_and_shows_settings_but_no_secrets(setting
     monkeypatch.setattr(requests, "Session", lambda: FakeSession())
     backup.main(new_run())
     lines = capsys.readouterr().out.splitlines()
-    assert "ucg-config-backup " + backup.VERSION + " starting" in lines[0]
-    for expected in ("host=192.0.2.1", "site=default", "retention_days=30", "webhook=set", "system_backup=true"):
-        assert expected in lines[0]
+    first = json.loads(lines[0])
+    assert first["event"] == "starting" and first["version"] == backup.VERSION and first["level"] == "INFO"
+    expected = {"host": "192.0.2.1", "site": "default", "retention_days": 30, "webhook": "set", "system_backup": True,
+                "cert_pin": "off", "log_level": "INFO"}
+    assert {k: first[k] for k in expected} == expected
     assert "secret" not in "".join(lines)
 
 
@@ -667,7 +684,7 @@ def test_a_settings_error_comes_after_the_starting_line(settings, monkeypatch, c
     monkeypatch.delenv("UCG_PASSWORD")
     with pytest.raises(RuntimeError):
         backup.main(new_run())
-    assert "starting" in capsys.readouterr().out
+    assert json.loads(capsys.readouterr().out.splitlines()[0])["event"] == "starting"
 
 
 # --- one run may not hang forever ------------------------------------------------
@@ -752,3 +769,188 @@ def test_the_success_webhook_names_both_files(settings, monkeypatch):
     assert body["filename"] == run["filename"] and body["system_filename"] == run["system_filename"]
     assert body["size_bytes"] == len(UNF_DATA) and body["backups_kept"] == 1
     assert run["filename"] in body["message"] and run["system_filename"] in body["message"]
+
+
+# --- JSON log lines ------------------------------------------------------------------
+
+def run_logs(capsys):
+    return [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+
+
+def test_every_log_line_is_one_json_object_with_ts_level_and_event(settings, monkeypatch, capsys):
+    monkeypatch.setattr(requests, "Session", lambda: FakeSession())
+    backup.main(new_run())
+    events = run_logs(capsys)
+    assert [e["event"] for e in events][0] == "starting"
+    assert "backup_saved" in [e["event"] for e in events]
+    for e in events:
+        assert set(e) >= {"ts", "level", "event"}
+        assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}(Z|[+-]\d\d:\d\d)", e["ts"])
+
+
+def test_the_timestamp_has_milliseconds_and_utc_prints_as_z(monkeypatch, capsys):
+    monkeypatch.setenv("TZ", "UTC")
+    time.tzset()
+    backup.log("x")
+    assert json.loads(capsys.readouterr().out)["ts"].endswith("Z")
+
+
+def test_log_level_hides_lower_levels_but_never_the_starting_line(settings, monkeypatch, capsys):
+    monkeypatch.setattr(backup, "LOG_LEVEL", "ERROR")
+    monkeypatch.setattr(requests, "Session", lambda: FakeSession())
+    backup.main(new_run())
+    assert [e["event"] for e in run_logs(capsys)] == ["starting"]
+
+
+def test_debug_shows_the_steps(settings, monkeypatch, capsys):
+    monkeypatch.setattr(backup, "LOG_LEVEL", "DEBUG")
+    monkeypatch.setattr(requests, "Session", lambda: FakeSession())
+    backup.main(new_run())
+    assert {"login", "backup_triggered", "download_started"} <= {e["event"] for e in run_logs(capsys)}
+
+
+def test_main_rejects_an_unknown_log_level(settings, monkeypatch, capsys):
+    monkeypatch.setattr(backup, "LOG_LEVEL", "LOUD")
+    with pytest.raises(backup.ConfigError, match="LOG_LEVEL"):
+        backup.main(new_run())
+    assert run_logs(capsys)[0]["log_level"] == "invalid"
+
+
+def run_entry_point(env, *args):
+    return subprocess.run(
+        [sys.executable, backup.__file__, *args], capture_output=True, text=True,
+        env={**{k: v for k, v in os.environ.items() if not k.startswith(("UCG_", "WEBHOOK"))}, **env},
+    )
+
+
+def test_a_bad_setting_is_logged_as_config_invalid():
+    out = run_entry_point({"UCG_HOST": "192.0.2.1", "UCG_USERNAME": "u", "UCG_PASSWORD": "p", "RETENTION_DAYS": "x"})
+    events = [json.loads(line) for line in out.stdout.splitlines()]
+    assert out.returncode == 1
+    assert [e["event"] for e in events] == ["starting", "config_invalid"]
+    assert events[1]["level"] == "ERROR" and "RETENTION_DAYS" in events[1]["error"]
+
+
+def test_a_failed_run_is_logged_as_run_failed(settings, monkeypatch, capsys):
+    out = run_entry_point({"UCG_HOST": "127.0.0.1:9", "UCG_USERNAME": "u", "UCG_PASSWORD": "p", "UCG_CERT_SHA256": ""})
+    events = [json.loads(line) for line in out.stdout.splitlines()]
+    assert out.returncode == 1 and events[-1]["event"] == "run_failed" and events[-1]["level"] == "ERROR"
+
+
+# --- certificate pinning ---------------------------------------------------------------
+
+@pytest.mark.parametrize("value,expected", [
+    ("", ""),
+    ("  ", ""),
+    ("AB" * 32, "ab" * 32),
+    (":".join(["Ab"] * 32), "ab" * 32),
+    (" " + "ab" * 32 + " ", "ab" * 32),
+    ("ab" * 31, None),
+    ("ab" * 33, None),
+    ("zz" * 32, None),
+    ("ab:" * 31 + "a", None),
+])
+def test_read_fingerprint(value, expected):
+    assert backup.read_fingerprint(value) == expected
+
+
+def test_main_rejects_a_malformed_pin(settings, monkeypatch):
+    monkeypatch.setattr(backup, "CERT_SHA256", None)
+    monkeypatch.setattr(requests, "Session", lambda: pytest.fail("must not connect"))
+    with pytest.raises(backup.ConfigError, match="UCG_CERT_SHA256"):
+        backup.main(new_run())
+
+
+def make_certificate(folder):
+    cert, key = folder / "stub.crt", folder / "stub.key"
+    subprocess.run(
+        ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=stub",
+         "-keyout", str(key), "-out", str(cert)], check=True, capture_output=True,
+    )
+    der = ssl.PEM_cert_to_DER_cert(cert.read_text())
+    return cert, key, hashlib.sha256(der).hexdigest()
+
+
+@pytest.fixture
+def tls_console(tmp_path, monkeypatch):
+    """The stub console on a local TLS port with a self-signed certificate."""
+    if shutil.which("openssl") is None:
+        pytest.skip("no openssl")
+    from tests import stub_console
+
+    cert, key, fingerprint = make_certificate(tmp_path)
+    server = stub_console.make_console_server(0, str(cert), str(key), host="127.0.0.1")
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    host = f"127.0.0.1:{server.server_address[1]}"
+    folder = tmp_path / "backups"
+    folder.mkdir()
+    monkeypatch.setattr(backup, "HOST", host)
+    monkeypatch.setattr(backup, "BASE", f"https://{host}")
+    monkeypatch.setattr(backup, "BACKUP_DIR", folder)
+    monkeypatch.setattr(backup, "USERNAME", "bot")
+    monkeypatch.setattr(backup, "PASSWORD", "secret")
+    monkeypatch.setattr(backup, "SITE", "good")
+    monkeypatch.setattr(backup, "RETENTION_DAYS", 30)
+    monkeypatch.setenv("UCG_HOST", host)
+    monkeypatch.setenv("UCG_USERNAME", "bot")
+    monkeypatch.setenv("UCG_PASSWORD", "secret")
+    yield fingerprint, folder
+    server.shutdown()
+
+
+def test_the_console_certificate_is_logged_and_the_run_works_without_a_pin(tls_console, monkeypatch, capsys):
+    fingerprint, folder = tls_console
+    monkeypatch.setattr(backup, "VERIFY_SSL", False)
+    backup.main(new_run())
+    event = next(e for e in run_logs(capsys) if e["event"] == "console_certificate")
+    assert event["sha256"] == backup.colon_hex(fingerprint) and event["pinned"] is False
+    assert len(list(folder.glob("ucg-*"))) == 2
+
+
+@pytest.mark.parametrize("verify_ssl", [False, True])
+def test_a_matching_pin_works_whatever_verify_ssl_says(tls_console, monkeypatch, verify_ssl):
+    # A self-signed certificate fails VERIFY_SSL=true; the pin replaces that check.
+    fingerprint, folder = tls_console
+    monkeypatch.setattr(backup, "VERIFY_SSL", verify_ssl)
+    monkeypatch.setattr(backup, "CERT_SHA256", fingerprint)
+    run = new_run()
+    backup.main(run)
+    assert (folder / run["filename"]).exists()
+
+
+def test_a_pin_that_does_not_match_fails_the_run_naming_both(tls_console, monkeypatch):
+    fingerprint, folder = tls_console
+    other = "cd" * 32
+    monkeypatch.setattr(backup, "VERIFY_SSL", False)
+    monkeypatch.setattr(backup, "CERT_SHA256", other)
+    with pytest.raises(RuntimeError, match="does not match UCG_CERT_SHA256") as err:
+        backup.main(new_run())
+    assert backup.colon_hex(other) in str(err.value) and backup.colon_hex(fingerprint) in str(err.value)
+    assert not list(folder.glob("ucg-*"))
+
+
+def test_the_pinned_adapter_refuses_another_certificate_on_every_connection(tls_console, monkeypatch):
+    # Even when the up-front check is bypassed (a certificate swapped in
+    # between), the connection itself is checked.
+    fingerprint, folder = tls_console
+    monkeypatch.setattr(backup, "CERT_SHA256", "cd" * 32)
+    session = requests.Session()
+    session.verify = False
+    session.mount("https://", backup.PinnedAdapter())
+    with pytest.raises(requests.exceptions.SSLError):
+        session.get(backup.BASE + "/api/backup/download", timeout=5)
+    monkeypatch.setattr(backup, "CERT_SHA256", fingerprint)
+    session = requests.Session()
+    session.verify = False
+    session.mount("https://", backup.PinnedAdapter())
+    assert session.get(backup.BASE + "/api/backup/download", timeout=5).status_code == 200
+
+
+def test_a_pin_mismatch_is_logged_as_certificate_mismatch(tls_console):
+    fingerprint, folder = tls_console
+    out = run_entry_point({
+        "UCG_HOST": backup.HOST, "UCG_USERNAME": "u", "UCG_PASSWORD": "p", "UCG_SITE": "good", "UCG_CERT_SHA256": "cd" * 32,
+        "LOCAL_BACKUP_DIR": str(folder),
+    })
+    events = [json.loads(line) for line in out.stdout.splitlines()]
+    assert out.returncode == 1 and events[-1]["event"] == "certificate_mismatch"
