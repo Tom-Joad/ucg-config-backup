@@ -30,6 +30,7 @@
   <Config Name="VERIFY_SSL" Target="VERIFY_SSL" Default="false" Mode="" Description="Check the console's TLS certificate (UniFi OS ships a self-signed one)" Type="Variable" Display="advanced" Required="false" Mask="false"/>
   <Config Name="CRON_SCHEDULE" Target="CRON_SCHEDULE" Default="0 3 * * *" Mode="" Description="When the backup runs (cron: minute hour day month weekday)" Type="Variable" Display="advanced" Required="false" Mask="false"/>
   <Config Name="RETENTION_DAYS" Target="RETENTION_DAYS" Default="30" Mode="" Description="Delete local backups older than N days (0 = keep everything)" Type="Variable" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="RUN_TIMEOUT" Target="RUN_TIMEOUT" Default="1800" Mode="" Description="Seconds one run may take before it is stopped as stuck" Type="Variable" Display="advanced" Required="false" Mask="false"/>
   <Config Name="RUN_ON_START" Target="RUN_ON_START" Default="true" Mode="" Description="Run a backup right after the container starts" Type="Variable" Display="advanced" Required="false" Mask="false"/>
   <Config Name="NOTIFY_ON_SUCCESS" Target="NOTIFY_ON_SUCCESS" Default="false" Mode="" Description="Also notify the webhook on success, not only on failure" Type="Variable" Display="advanced" Required="false" Mask="false"/>
   <Config Name="WEBHOOK_URL" Target="WEBHOOK_URL" Default="" Mode="" Description="Optional: URL for POST notifications (ntfy.sh, Healthchecks.io, Home Assistant webhook). Usually contains a secret" Type="Variable" Display="advanced" Required="false" Mask="true"/>

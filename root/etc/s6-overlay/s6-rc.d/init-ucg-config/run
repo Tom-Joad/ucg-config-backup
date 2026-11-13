@@ -4,6 +4,10 @@
 # Checks the settings and writes the schedule. An `exit 1` here stops the
 # container (S6_BEHAVIOUR_IF_STAGE2_FAILS=2), so a problem is visible.
 
+# The first line of every start, like the one each backup run logs, so a
+# bug report shows the version even when a setting is wrong.
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] ucg-config-backup $(python3 /usr/local/bin/backup.py --version) starting"
+
 failed=0
 for name in UCG_HOST UCG_USERNAME UCG_PASSWORD; do
     if [[ -z ${!name:-} ]]; then
@@ -38,6 +42,19 @@ done
 value=$(setting RETENTION_DAYS)
 if [[ -n ${value} && ! ${value} =~ ^[0-9]+$ ]]; then
     echo "ERROR: RETENTION_DAYS must be a whole number of 0 or more, got '${value}'" >&2
+    failed=1
+fi
+
+value=$(setting RUN_TIMEOUT)
+if [[ -n ${value} ]] && { [[ ! ${value} =~ ^[0-9]+$ ]] || (( 10#${value} < 1 )); }; then
+    echo "ERROR: RUN_TIMEOUT must be a whole number of seconds, 1 or more, got '${value}'" >&2
+    failed=1
+fi
+
+# The site name goes into a URL path.
+value=$(setting UCG_SITE)
+if [[ -n ${value} && ! ${value} =~ ^[A-Za-z0-9_-]+$ ]]; then
+    echo "ERROR: UCG_SITE may only contain letters, digits, '-' and '_', got '${value}'" >&2
     failed=1
 fi
 

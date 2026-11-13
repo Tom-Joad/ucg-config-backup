@@ -10,6 +10,10 @@ import requests
 
 import backup
 
+# Stand-ins for real downloads: binary and bigger than backup.MIN_BACKUP_BYTES.
+UNF_DATA = b"\x00unf" + bytes(range(256)) * 8
+SYSTEM_DATA = b"\x00system" + bytes(range(255, -1, -1)) * 8
+
 
 class FakeResponse:
     def __init__(self, status=200, headers=None, json_data=None, content=b"", text=""):
@@ -60,8 +64,8 @@ class FakeSession:
     def get(self, url, **kwargs):
         self.calls.append(("GET", url))
         if url.endswith("/api/backup/download"):
-            return FakeResponse(status=self.system_status, headers=self.system_headers, content=b"system-data")
-        return FakeResponse(headers={"content-type": self.download_type}, content=b"unf-data")
+            return FakeResponse(status=self.system_status, headers=self.system_headers, content=SYSTEM_DATA)
+        return FakeResponse(headers={"content-type": self.download_type}, content=UNF_DATA)
 
 
 @pytest.fixture
@@ -178,12 +182,12 @@ def test_main_saves_backup_and_applies_retention(settings, monkeypatch):
 
     assert not old.exists()
     assert other.exists()
-    assert run["size_bytes"] == len(b"unf-data")
-    assert (settings / run["filename"]).read_bytes() == b"unf-data"
+    assert run["size_bytes"] == len(UNF_DATA)
+    assert (settings / run["filename"]).read_bytes() == UNF_DATA
     assert run["backups_kept"] == 1
     assert run["system_filename"].endswith(".unifi")
-    assert run["system_size_bytes"] == len(b"system-data")
-    assert (settings / run["system_filename"]).read_bytes() == b"system-data"
+    assert run["system_size_bytes"] == len(SYSTEM_DATA)
+    assert (settings / run["system_filename"]).read_bytes() == SYSTEM_DATA
     assert run["system_backups_kept"] == 1
     assert ("GET", "https://192.0.2.1/api/backup/download") in session.calls
     assert ("GET", "https://192.0.2.1/proxy/network/dl/file.unf") in session.calls
@@ -245,7 +249,7 @@ class HtmlResponse(FakeResponse):
 def test_unexpected_backup_answer_gives_the_clear_error(settings, monkeypatch, answer):
     session = FakeSession(backup_json=answer)
     monkeypatch.setattr(requests, "Session", lambda: session)
-    with pytest.raises(RuntimeError, match="Unexpected backup response, no download URL: .*UCG_SITE"):
+    with pytest.raises(RuntimeError, match=r"Unexpected backup response \(HTTP 200, \d+ bytes\), no download URL.*UCG_SITE"):
         backup.main(new_run())
 
 
@@ -257,8 +261,9 @@ def test_a_non_json_backup_answer_gives_the_clear_error(settings, monkeypatch):
             return super().post(url, **kwargs)
 
     monkeypatch.setattr(requests, "Session", lambda: HtmlSession())
-    with pytest.raises(RuntimeError, match="Unexpected backup response, no download URL: <html>Bad gateway</html>"):
+    with pytest.raises(RuntimeError, match="Unexpected backup response") as err:
         backup.main(new_run())
+    assert "Bad gateway" not in str(err.value)  # the console's text stays out of the log and webhook
 
 
 def test_a_403_is_retried_once_after_a_fresh_login(settings, monkeypatch):
@@ -269,6 +274,9 @@ def test_a_403_is_retried_once_after_a_fresh_login(settings, monkeypatch):
     assert [c for c in session.calls if c[1].endswith("/api/auth/login")] == [("POST", "https://192.0.2.1/api/auth/login")] * 2
     assert [c for c in session.calls if c[1].endswith("/cmd/backup")] == [("POST", "https://192.0.2.1/proxy/network/api/s/default/cmd/backup")] * 2
     assert run["filename"]
+    # The first session is closed before the second login.
+    kinds = [c[1].rsplit("/", 1)[-1] for c in session.calls if c[0] == "POST"]
+    assert kinds[:4] == ["login", "backup", "logout", "login"]
 
 
 def test_a_second_403_fails_after_one_retry(settings, monkeypatch):
@@ -403,7 +411,7 @@ def test_a_rejected_system_backup_fails_the_run_but_keeps_the_network_backup(set
     run = new_run()
     with pytest.raises(RuntimeError, match=f"System backup download rejected \\({status}\\).*{hint}.*SYSTEM_BACKUP=false"):
         backup.main(run)
-    assert (settings / run["filename"]).read_bytes() == b"unf-data"
+    assert (settings / run["filename"]).read_bytes() == UNF_DATA
     assert run["system_filename"] is None
     assert not list(settings.glob("ucg-system-backup-*"))
     assert ("POST", "https://192.0.2.1/api/auth/logout") in session.calls
@@ -442,3 +450,305 @@ def test_retention_covers_system_backups(settings):
     assert fresh.exists()
     assert run["system_backups_kept"] == 1
     assert run["backups_kept"] == 0
+
+
+# --- what counts as a backup -------------------------------------------------
+
+class TextSession(FakeSession):
+    """A console that answers the download with the given body and headers."""
+
+    def __init__(self, content, headers=None, **kwargs):
+        super().__init__(**kwargs)
+        self.content = content
+        self.dl_headers = headers or {}
+
+    def get(self, url, **kwargs):
+        self.calls.append(("GET", url))
+        return FakeResponse(headers=self.dl_headers, content=self.content)
+
+
+@pytest.mark.parametrize("content,headers,message", [
+    (b"Unauthorized", {"content-type": "text/plain"}, "too small"),
+    (b"Unauthorized", {}, "too small"),
+    (b"\x00" * 10, {"content-type": "application/octet-stream"}, "too small"),
+    (b"Internal Server Error\n" * 100, {"content-type": "application/octet-stream"}, "plain text"),
+    (b"Internal Server Error\n" * 100, {}, "plain text"),
+    (UNF_DATA, {"content-length": str(len(UNF_DATA) + 100)}, "incomplete"),
+])
+def test_an_error_text_or_cut_off_download_is_not_kept_as_a_backup(settings, monkeypatch, content, headers, message):
+    monkeypatch.setattr(requests, "Session", lambda: TextSession(content, headers))
+    with pytest.raises(RuntimeError, match=message):
+        backup.main(new_run())
+    assert not list(settings.glob("ucg-*"))
+    assert not list(settings.glob(".*partial"))
+
+
+@pytest.mark.parametrize("content", [
+    UNF_DATA,
+    b"PK\x03\x04" + bytes(range(256)) * 8,
+    bytes(range(256)) * 4 + "ä".encode("utf-8")[:1],  # binary, cut in the middle of a character
+])
+def test_binary_data_is_kept(settings, monkeypatch, content):
+    monkeypatch.setattr(requests, "Session", lambda: TextSession(content, {"content-length": str(len(content))}))
+    monkeypatch.setattr(backup, "SYSTEM_BACKUP", False)
+    run = new_run()
+    backup.main(run)
+    assert (settings / run["filename"]).read_bytes() == content
+
+
+def test_the_download_is_synced_before_the_rename(settings, monkeypatch):
+    events = []
+    real_fsync, real_replace = os.fsync, type(settings).replace
+    monkeypatch.setattr(os, "fsync", lambda fd: events.append("fsync") or real_fsync(fd))
+    monkeypatch.setattr(type(settings), "replace", lambda self, t: events.append("replace") or real_replace(self, t))
+    backup.store_download(FakeResponse(headers={}, content=UNF_DATA), "ucg-backup-20300101-000000.unf")
+    assert events[:2] == ["fsync", "replace"]
+
+
+def good_backup(folder, name, age_days):
+    f = folder / name
+    f.write_bytes(UNF_DATA)
+    when = time.time() - age_days * 86400
+    os.utime(f, (when, when))
+    return f
+
+
+def test_retention_always_keeps_the_newest_backups(settings):
+    # Everything is older than RETENTION_DAYS (30): a console that failed for a
+    # while must not make the last good backups expire.
+    files = [good_backup(settings, f"ucg-backup-2020010{i}-000000.unf", 40 + i) for i in range(1, 6)]
+    systems = [good_backup(settings, f"ucg-system-backup-2020010{i}-000000.unifi", 40 + i) for i in range(1, 6)]
+    run = new_run()
+    backup.apply_retention(run)
+    assert [f.exists() for f in files] == [True] * backup.KEEP_NEWEST + [False] * (5 - backup.KEEP_NEWEST)
+    assert [f.exists() for f in systems] == [True] * backup.KEEP_NEWEST + [False] * (5 - backup.KEEP_NEWEST)
+    assert run["backups_kept"] == backup.KEEP_NEWEST
+
+
+def test_small_leftovers_of_older_versions_do_not_protect_anything(settings):
+    # Versions before this one kept error texts as backups. They are the
+    # newest files but not backups, so the real ones stay protected.
+    real = [good_backup(settings, f"ucg-backup-2020010{i}-000000.unf", 40 + i) for i in range(1, 4)]
+    junk = settings / "ucg-backup-20200110-000000.unf"
+    junk.write_bytes(b"Unauthorized")
+    when = time.time() - 35 * 86400
+    os.utime(junk, (when, when))
+    backup.apply_retention(new_run())
+    assert all(f.exists() for f in real)
+    assert not junk.exists()
+
+
+def test_recent_backups_are_never_touched(settings):
+    fresh = [good_backup(settings, f"ucg-backup-2030010{i}-000000.unf", i) for i in range(1, 6)]
+    backup.apply_retention(new_run())
+    assert all(f.exists() for f in fresh)
+
+
+# --- the download address ----------------------------------------------------
+
+@pytest.mark.parametrize("path,url", [
+    ("/dl/file.unf", "https://192.0.2.1/proxy/network/dl/file.unf"),
+    ("dl/file.unf", "https://192.0.2.1/proxy/network/dl/file.unf"),
+    ("/proxy/network/dl/file.unf", "https://192.0.2.1/proxy/network/dl/file.unf"),
+    ("/dl/file.unf?x=1", "https://192.0.2.1/proxy/network/dl/file.unf?x=1"),
+])
+def test_download_path_variants(settings, monkeypatch, path, url):
+    session = FakeSession(backup_json={"data": [{"url": path}]})
+    monkeypatch.setattr(requests, "Session", lambda: session)
+    backup.main(new_run())
+    assert ("GET", url) in session.calls
+
+
+@pytest.mark.parametrize("answer", [
+    None, 5, "", ["/dl/a"], "https://evil.example/dl.unf", "//evil.example/dl.unf", "http://192.0.2.1/dl.unf",
+    "/dl/../../etc/passwd", "../x", "/dl/a b", "/dl\\x", "javascript:alert(1)",
+])
+def test_a_download_url_that_is_not_a_path_on_the_console_is_refused(settings, monkeypatch, answer):
+    session = FakeSession(backup_json={"data": [{"url": answer}]})
+    monkeypatch.setattr(requests, "Session", lambda: session)
+    with pytest.raises(RuntimeError, match="download URL|no download URL"):
+        backup.main(new_run())
+    # Nothing was fetched from anywhere, and the session was closed.
+    assert not [c for c in session.calls if c[0] == "GET"]
+    assert ("POST", "https://192.0.2.1/api/auth/logout") in session.calls
+
+
+# --- login --------------------------------------------------------------------
+
+def test_a_rejected_login_names_the_account_hint(settings, monkeypatch):
+    class Rejecting(FakeSession):
+        def post(self, url, **kwargs):
+            if url.endswith("/api/auth/login"):
+                return FakeResponse(status=401)
+            return super().post(url, **kwargs)
+
+    monkeypatch.setattr(requests, "Session", lambda: Rejecting())
+    with pytest.raises(RuntimeError, match=r"Login rejected \(401\).*local"):
+        backup.main(new_run())
+
+
+def test_a_login_without_csrf_token_names_2fa(settings, monkeypatch):
+    class NoToken(FakeSession):
+        def post(self, url, **kwargs):
+            if url.endswith("/api/auth/login"):
+                return FakeResponse(headers={})
+            return super().post(url, **kwargs)
+
+    monkeypatch.setattr(requests, "Session", lambda: NoToken())
+    with pytest.raises(RuntimeError, match="2FA"):
+        backup.main(new_run())
+
+
+def test_a_server_error_on_login_fails_the_run(settings, monkeypatch):
+    class Broken(FakeSession):
+        def post(self, url, **kwargs):
+            if url.endswith("/api/auth/login"):
+                return FakeResponse(status=502)
+            return super().post(url, **kwargs)
+
+    monkeypatch.setattr(requests, "Session", lambda: Broken())
+    with pytest.raises(requests.HTTPError, match="502"):
+        backup.main(new_run())
+
+
+# --- settings -------------------------------------------------------------------
+
+@pytest.mark.parametrize("site", ["a/b", "..", "default?x=1", "a b", "a#b", "ä"])
+def test_main_rejects_a_site_that_does_not_belong_in_a_url_path(settings, monkeypatch, site):
+    monkeypatch.setattr(backup, "SITE", site)
+    monkeypatch.setattr(requests, "Session", lambda: pytest.fail("must not connect"))
+    with pytest.raises(RuntimeError, match="UCG_SITE"):
+        backup.main(new_run())
+
+
+@pytest.mark.parametrize("site", ["default", "5f3a9b2c", "my-site_2"])
+def test_main_accepts_a_normal_site(settings, monkeypatch, site):
+    monkeypatch.setattr(backup, "SITE", site)
+    session = FakeSession()
+    monkeypatch.setattr(requests, "Session", lambda: session)
+    backup.main(new_run())
+    assert ("POST", f"https://192.0.2.1/proxy/network/api/s/{site}/cmd/backup") in session.calls
+
+
+def import_with_env(**env):
+    out = subprocess.run(
+        [sys.executable, "-c", "import backup; print(repr((backup.HOST, backup.SITE, backup.WEBHOOK_URL, backup.RUN_TIMEOUT)))"],
+        capture_output=True, text=True, check=True, cwd=os.path.dirname(backup.__file__),
+        env={**os.environ, **env},
+    )
+    return out.stdout.strip()
+
+
+def test_blanks_around_the_host_are_trimmed_like_the_init_step_does():
+    assert import_with_env(UCG_HOST="  192.0.2.1:8443 ", UCG_SITE=" default ", WEBHOOK_URL=" https://h.example/x ") == \
+        "('192.0.2.1:8443', 'default', 'https://h.example/x', 1800)"
+
+
+@pytest.mark.parametrize("value", ["0", "-5", "abc", "1.5"])
+def test_main_rejects_a_bad_run_timeout(settings, monkeypatch, value):
+    monkeypatch.setattr(backup, "RUN_TIMEOUT", None)
+    monkeypatch.setenv("RUN_TIMEOUT", value)
+    with pytest.raises(RuntimeError, match="RUN_TIMEOUT"):
+        backup.main(new_run())
+
+
+def test_the_starting_line_comes_first_and_shows_settings_but_no_secrets(settings, monkeypatch, capsys):
+    monkeypatch.setattr(backup, "WEBHOOK_URL", "https://hook.example/very-secret-id")
+    monkeypatch.setattr(requests, "Session", lambda: FakeSession())
+    backup.main(new_run())
+    lines = capsys.readouterr().out.splitlines()
+    assert "ucg-config-backup " + backup.VERSION + " starting" in lines[0]
+    for expected in ("host=192.0.2.1", "site=default", "retention_days=30", "webhook=set", "system_backup=true"):
+        assert expected in lines[0]
+    assert "secret" not in "".join(lines)
+
+
+def test_a_settings_error_comes_after_the_starting_line(settings, monkeypatch, capsys):
+    monkeypatch.delenv("UCG_PASSWORD")
+    with pytest.raises(RuntimeError):
+        backup.main(new_run())
+    assert "starting" in capsys.readouterr().out
+
+
+# --- one run may not hang forever ------------------------------------------------
+
+def test_a_run_that_takes_too_long_is_stopped(settings, monkeypatch):
+    class Hanging(FakeSession):
+        def get(self, url, **kwargs):
+            time.sleep(5)  # a console that keeps the download open
+
+    session = Hanging()
+    monkeypatch.setattr(requests, "Session", lambda: session)
+    monkeypatch.setattr(backup, "RUN_TIMEOUT", 1)
+    started = time.monotonic()
+    try:
+        with pytest.raises(RuntimeError, match="RUN_TIMEOUT"):
+            backup.main(new_run())
+    finally:
+        signal_off()
+    assert time.monotonic() - started < 4
+    assert ("POST", "https://192.0.2.1/api/auth/logout") in session.calls
+    assert not list(settings.glob("ucg-*"))
+
+
+def signal_off():
+    import signal
+    signal.alarm(0)
+
+
+def test_a_finished_run_leaves_no_pending_deadline(settings, monkeypatch):
+    import signal
+    monkeypatch.setattr(requests, "Session", lambda: FakeSession())
+    try:
+        backup.main(new_run())
+        assert signal.alarm(0) > 0  # still armed after main(), the entry point disarms it before the webhook
+    finally:
+        signal_off()
+
+
+def test_skipped_runs_send_a_failed_webhook(tmp_path):
+    import http.server
+    import threading
+
+    received = []
+
+    class Hook(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            received.append(self.rfile.read(int(self.headers["content-length"])))
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Hook)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        out = subprocess.run(
+            [sys.executable, backup.__file__, "--skipped", "3"], capture_output=True, text=True,
+            env={**os.environ, "WEBHOOK_URL": f"http://127.0.0.1:{server.server_port}/secret-id", "WEBHOOK_FORMAT": "json"},
+        )
+    finally:
+        server.shutdown()
+    assert out.returncode == 1
+    assert b'"status": "failed"' in received[0] or b'"status":"failed"' in received[0]
+    assert b"3 backup runs in a row were skipped" in received[0]
+    assert "secret-id" not in out.stdout + out.stderr
+
+
+# --- the success webhook -----------------------------------------------------------
+
+def test_the_success_webhook_names_both_files(settings, monkeypatch):
+    sent = {}
+    monkeypatch.setattr(backup, "WEBHOOK_URL", "https://hook.example/secret")
+    monkeypatch.setattr(backup, "WEBHOOK_FORMAT", "json")
+    monkeypatch.setattr(requests, "Session", lambda: FakeSession())
+    monkeypatch.setattr(requests, "post", lambda url, **kw: sent.update(kw) or FakeResponse())
+    run = new_run()
+    backup.main(run)
+    backup.notify(True, backup.success_message(run), run)
+    body = sent["json"]
+    assert body["status"] == "ok"
+    assert body["filename"] == run["filename"] and body["system_filename"] == run["system_filename"]
+    assert body["size_bytes"] == len(UNF_DATA) and body["backups_kept"] == 1
+    assert run["filename"] in body["message"] and run["system_filename"] in body["message"]

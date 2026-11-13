@@ -53,17 +53,25 @@ at container start via `RUN_ON_START`) the container:
 2. Triggers a backup via the proxied Network API (`cmd/backup`).
 3. Downloads the returned one-time backup URL and saves it as
    `ucg-backup-<timestamp>.unf` into `/backups`. A download that turns out
-   to be a web page or an error message instead of a backup fails the run.
+   to be a web page, an error message or something far too small to be a
+   backup (under 1 KiB) fails the run and is not kept.
 4. Downloads the console's system backup (`/api/backup/download`) and
    saves it as `ucg-system-backup-<timestamp>.unifi`, with the same check.
    If the console refuses it, the run fails, and the Network backup from
    step 3 stays. `SYSTEM_BACKUP=false` skips this step.
 5. Logs out again, also when a step failed.
-6. Deletes local backups older than `RETENTION_DAYS`, and optionally posts
-   a notification to `WEBHOOK_URL`.
+6. Deletes local backups older than `RETENTION_DAYS` (never the newest
+   three of each kind, however old: if the console fails for weeks, the
+   last good backups stay), and optionally posts a notification to
+   `WEBHOOK_URL`.
 
 Only one backup runs at a time: a run that starts while another one is
 still going (the start-up run, a manual one) is skipped with a warning.
+A run that takes longer than `RUN_TIMEOUT` (30 minutes by default) is
+stopped, and when three runs in a row were skipped, a failed notification
+goes to `WEBHOOK_URL`. Run a manual backup as root
+(`docker exec ucg-config-backup ucg-backup`, without `-u`): the script
+switches to `PUID:PGID` itself.
 
 ## Prerequisites on the UCG Ultra
 
@@ -205,7 +213,7 @@ as those above). The usual linuxserver.io parameters apply:
 | :----: | --- |
 | `-e PUID=1000` | User ID the backup runs as, and the owner of the backup files |
 | `-e PGID=1000` | Group ID of the same |
-| `-e UMASK=022` | Umask of the backup files (`002` lets the group write) |
+| `-e UMASK=022` | Umask of the backup files (`002` lets the group write; `027` or `077` hide them from other users, see [Security notes](#security-notes)) |
 | `-e TZ=Europe/Berlin` | Timezone for the schedule and log timestamps |
 | `-v /backups` | The downloaded backup files (`.unf` and `.unifi`) |
 
@@ -221,11 +229,13 @@ with it set.
 | `UCG_HOST` | yes | – | IP address or host name of the UCG Ultra, optionally with `:port`; no `https://` and no path |
 | `UCG_USERNAME` | yes | – | Local admin username (see [Prerequisites](#prerequisites-on-the-ucg-ultra)) |
 | `UCG_PASSWORD` | yes | – | Password for that account |
-| `UCG_SITE` | | `default` | UniFi site name |
+| `UCG_SITE` | | `default` | UniFi site name (letters, digits, `-` and `_` only; anything else stops the container) |
 | `SYSTEM_BACKUP` | | `true` | `true` or `false`: also save the console's system backup (all applications and settings) next to the Network backup |
 | `VERIFY_SSL` | | `false` | `true` or `false` (any case; anything else stops the container): verify the console's TLS certificate (UniFi OS ships a self-signed cert by default) |
 | `CRON_SCHEDULE` | | `0 3 * * *` | Cron expression for the backup run (five fields, each inside its range, separated by spaces or tabs; anything else stops the container with an `ERROR:` line) |
-| `RETENTION_DAYS` | | `30` | Delete local backups older than N days (`0` = keep forever; anything but a whole number of 0 or more stops the container) |
+| `RETENTION_DAYS` | | `30` | Delete local backups older than N days (`0` = keep forever; anything but a whole number of 0 or more stops the container). The newest three backups of each kind are always kept |
+| `RUN_TIMEOUT` | | `1800` | Seconds one run may take before it is stopped as stuck (a whole number, 1 or more) |
+| `LOCAL_BACKUP_DIR` | | `/backups` | Folder inside the container the backups are written to. Leave it alone and map the host folder to `/backups`; change it only if you must, then map your volume to the new path |
 | `RUN_ON_START` | | `true` | `true` or `false`: run a backup immediately when the container starts |
 | `NOTIFY_ON_SUCCESS` | | `false` | `true` or `false`: also send a webhook on success, not just on failure |
 | `WEBHOOK_URL` | | – | URL to POST run notifications to (e.g. ntfy.sh, Healthchecks.io, Home Assistant) — must start with `http://` or `https://`; treat it as a secret, see [Webhook notifications](#webhook-notifications) |
@@ -365,8 +375,11 @@ belongs to someone else is left alone.
   console, set `VERIFY_SSL=true`.
 * Use a dedicated local admin account scoped to what backups need — don't
   reuse your primary login.
-* The backup files hold the console's whole configuration. Keep `/backups`
-  readable only by the users who need it.
+* The backup files hold the console's whole configuration. With the
+  default `UMASK=022` every user on the Docker host can read them. Set
+  `UMASK=027` (owner and group) or `UMASK=077` (owner only) to close that,
+  and keep `/backups` readable only by the users who need it. A backup
+  that was written before can be tightened with `chmod`.
 
 ## Troubleshooting
 
@@ -389,9 +402,16 @@ belongs to someone else is left alone.
   backup of the run is saved either way; `SYSTEM_BACKUP=false` turns the
   system backup off.
 * **`Unexpected backup response, no download URL`** — the API response
-  shape can differ slightly between firmware versions; check the full log
+  shape can differ slightly between firmware versions; check the log
   (`docker logs ucg-config-backup`) and verify `UCG_SITE` (the site name
-  is `default` unless you renamed it).
+  is `default` unless you renamed it). The console's answer itself is not
+  logged.
+* **`Download is only N bytes` / `Download is plain text`** — the console
+  answered with an error text instead of a backup. It is not kept and
+  doesn't count towards the retention. Check the account's rights and run
+  it again.
+* **`The run took longer than RUN_TIMEOUT`** — the console or the network
+  stalled. The run was stopped, the next scheduled one starts normally.
 * **`Download returned text/html instead of a backup file`** — the console
   answered the download with a web page, usually because the session
   ended or the firmware changed the download path. Run it again; if it

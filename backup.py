@@ -12,6 +12,7 @@ import datetime
 import os
 import pathlib
 import re
+import signal
 import sys
 import time
 import urllib.parse
@@ -28,10 +29,13 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # level may raise: a broken environment has to reach the top-level guard
 # below so it still gets reported via the webhook.
 
-HOST = os.environ.get("UCG_HOST", "")
+# Trimmed like the init step does, so a value the container accepted also works here.
+HOST = os.environ.get("UCG_HOST", "").strip()
 USERNAME = os.environ.get("UCG_USERNAME", "")
 PASSWORD = os.environ.get("UCG_PASSWORD", "")
-SITE = os.environ.get("UCG_SITE", "default")
+SITE = os.environ.get("UCG_SITE", "").strip() or "default"
+# The site goes into a URL path: only the characters a UniFi site name has.
+SITE_RE = re.compile(r"[A-Za-z0-9_-]+")
 
 
 def read_bool(name, default):
@@ -50,10 +54,19 @@ except ValueError:
     RETENTION_DAYS = None  # rejected in main(), so the failure goes out via the webhook
 if RETENTION_DAYS is not None and RETENTION_DAYS < 0:
     RETENTION_DAYS = None
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "").strip()
 WEBHOOK_FORMAT = os.environ.get("WEBHOOK_FORMAT", "text").strip().lower() or "text"
 NOTIFY_ON_SUCCESS = read_bool("NOTIFY_ON_SUCCESS", "false")
 SYSTEM_BACKUP = read_bool("SYSTEM_BACKUP", "true")
+# Seconds a whole run may take (login to logout). The per-request timeouts
+# only limit one wait each; a console that keeps answering slowly would hold
+# the lock for good and every later run would be skipped.
+try:
+    RUN_TIMEOUT = int(os.environ.get("RUN_TIMEOUT", "").strip() or "1800")
+except ValueError:
+    RUN_TIMEOUT = None  # rejected in main()
+if RUN_TIMEOUT is not None and RUN_TIMEOUT < 1:
+    RUN_TIMEOUT = None
 
 # Seconds to wait before each webhook retry. Home Assistant is briefly
 # unreachable while it restarts, and the default 03:00 run can land in a
@@ -70,6 +83,14 @@ INVALID_URL_ERRORS = (
 # A run killed half-way (SIGKILL, a container stop) leaves its hidden
 # .partial file behind. Older ones than this can't belong to a running backup.
 PARTIAL_MAX_AGE_S = 3600
+
+# A real backup is far bigger than this (encrypted .unf, archive .unifi); an
+# error text or a stub is not. Smaller than this is never kept as a backup.
+MIN_BACKUP_BYTES = 1024
+# Retention never removes the newest files of each kind, however old they
+# are: a console that answers with errors for a while must not make the
+# last good backups expire.
+KEEP_NEWEST = 3
 
 # What a console sends instead of a backup when something is off (a login
 # page, an error object). A .unf file is encrypted binary.
@@ -165,8 +186,38 @@ def refresh_csrf(session, resp):
         session.headers["X-CSRF-Token"] = new_token
 
 
+def effective_settings():
+    # For the `starting` line: what this run uses, never the password or the
+    # webhook URL (only whether one is set).
+    def flag(value):
+        return "invalid" if value is None else str(value).lower()
+    return (
+        f"host={HOST or 'unset'} site={SITE} user={USERNAME or 'unset'} verify_ssl={flag(VERIFY_SSL)} "
+        f"system_backup={flag(SYSTEM_BACKUP)} retention_days={RETENTION_DAYS if RETENTION_DAYS is not None else 'invalid'} "
+        f"run_timeout={RUN_TIMEOUT if RUN_TIMEOUT is not None else 'invalid'} "
+        f"webhook={'set' if WEBHOOK_URL else 'off'} notify_on_success={flag(NOTIFY_ON_SUCCESS)} "
+        f"backup_dir={BACKUP_DIR}"
+    )
+
+
+def start_deadline(seconds):
+    # SIGALRM interrupts a blocked read, which a requests timeout does not
+    # (it is per wait, so a trickling download never trips it).
+    def expired(signum, frame):
+        raise RuntimeError(
+            f"The run took longer than RUN_TIMEOUT ({seconds} s) and was stopped. "
+            "Is the console answering slowly, or the download stuck?"
+        )
+    signal.signal(signal.SIGALRM, expired)
+    signal.alarm(seconds)
+
+
 def main(run):
-    missing = [name for name in ("UCG_HOST", "UCG_USERNAME", "UCG_PASSWORD") if not os.environ.get(name)]
+    log(f"ucg-config-backup {VERSION} starting ({effective_settings()})")
+    missing = [
+        name for name, value in (("UCG_HOST", HOST), ("UCG_USERNAME", os.environ.get("UCG_USERNAME")), ("UCG_PASSWORD", os.environ.get("UCG_PASSWORD")))
+        if not value
+    ]
     if missing:
         raise RuntimeError(f"Missing required setting(s): {', '.join(missing)}")
     bad_bools = [
@@ -183,9 +234,13 @@ def main(run):
         raise RuntimeError(
             f"RETENTION_DAYS must be a whole number of 0 or more, got '{os.environ['RETENTION_DAYS']}'"
         )
+    if RUN_TIMEOUT is None:
+        raise RuntimeError(f"RUN_TIMEOUT must be a whole number of seconds, 1 or more, got '{os.environ['RUN_TIMEOUT']}'")
+    if not SITE_RE.fullmatch(SITE):
+        raise RuntimeError("UCG_SITE may only contain letters, digits, '-' and '_' (it is the site's internal name, 'default' unless you changed it)")
 
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    log(f"ucg-config-backup {VERSION} starting")
+    start_deadline(RUN_TIMEOUT)
 
     session = requests.Session()
     session.verify = VERIFY_SSL
@@ -199,10 +254,7 @@ def main(run):
         if SYSTEM_BACKUP:
             save_system_backup(session, run)
     finally:
-        try:
-            session.post(f"{BASE}/api/auth/logout", timeout=10)
-        except requests.RequestException:
-            pass
+        logout(session)
 
     try:
         apply_retention(run)
@@ -210,6 +262,14 @@ def main(run):
         run["retention_warnings"] = run.get("retention_warnings", 0) + 1  # the listing itself failed
         log(f"WARNING: retention failed: {exc}")
     log("Backup completed successfully.")
+
+
+def logout(session):
+    # Best effort: the run's own result matters more than the goodbye.
+    try:
+        session.post(f"{BASE}/api/auth/logout", timeout=10)
+    except requests.RequestException:
+        pass
 
 
 def login(session):
@@ -245,17 +305,25 @@ def request_backup(session):
 
 def backup_download_path(resp):
     # Anything but a JSON object with a non-empty `data` list whose first item
-    # has a `url` (an HTML page from a proxy, a changed firmware answer) gets
-    # the same clear message instead of a JSONDecodeError or KeyError.
+    # has a string `url` (an HTML page from a proxy, a changed firmware
+    # answer, `"url": null`) gets the same clear message instead of a
+    # JSONDecodeError or KeyError. The body itself is not quoted: it is the
+    # console's text and doesn't belong in a log or a webhook.
     try:
-        payload = resp.json()
-        data = payload["data"]
-        return data[0]["url"]
+        url = resp.json()["data"][0]["url"]
     except (ValueError, LookupError, TypeError):
+        url = None
+    if not isinstance(url, str) or not url:
         raise RuntimeError(
-            f"Unexpected backup response, no download URL: {resp.text[:500]} "
-            "-- check that UCG_SITE is the right site name."
-        ) from None
+            f"Unexpected backup response (HTTP {resp.status_code}, {len(resp.content or b'')} bytes), "
+            "no download URL -- check that UCG_SITE is the right site name."
+        )
+    # The path is joined onto the console's own address. One with a scheme or
+    # host would send the session cookie elsewhere.
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme or parts.netloc or ".." in parts.path.split("/") or "\\" in url or any(c.isspace() for c in url):
+        raise RuntimeError("The console's download URL is not a path on the console itself, not following it.")
+    return url
 
 
 def save_backup(session, run):
@@ -265,6 +333,7 @@ def save_backup(session, run):
         # A stale CSRF token or session gives a 403 as well: log in again
         # once, with a fresh session and token, before giving up.
         log("Backup command rejected (403), logging in again and retrying once...")
+        logout(session)  # the first session would otherwise stay open on the console
         session.cookies.clear()
         login(session)
         resp = request_backup(session)
@@ -322,20 +391,70 @@ def save_system_backup(session, run):
     run["system_size_bytes"] = len(dl.content)
 
 
-def store_download(dl, filename):
+def looks_like_text(content):
+    # An error message in plain text, a stub page, `null`: what a console
+    # sends instead of a backup. Encrypted or compressed data is never
+    # entirely printable (and has NUL bytes), so the first kilobyte decides.
+    head = content[:1024]
+    try:
+        text = head.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        if exc.start < len(head) - 4:  # not just a character cut off at the end
+            return False
+        text = head[:exc.start].decode("utf-8")
+    return all(c.isprintable() or c in "\r\n\t" for c in text)
+
+
+def check_download(dl):
+    # Checks that a download is a backup before it is kept and counted.
     if not dl.content:
         raise RuntimeError("Downloaded backup file is empty.")
     content_type = dl.headers.get("content-type", "").split(";")[0].strip().lower()
     if content_type in NOT_A_BACKUP_TYPES:
         raise RuntimeError(f"Download returned {content_type} instead of a backup file.")
+    # A cut-off transfer: requests usually raises, but not every proxy
+    # closes the connection cleanly.
+    expected = dl.headers.get("content-length", "")
+    if expected.isdigit() and not dl.headers.get("content-encoding") and int(expected) != len(dl.content):
+        raise RuntimeError(f"Download is incomplete ({len(dl.content)} of {expected} bytes).")
+    if len(dl.content) < MIN_BACKUP_BYTES:
+        raise RuntimeError(
+            f"Download is only {len(dl.content)} bytes, too small for a backup (minimum {MIN_BACKUP_BYTES}); "
+            "not kept. The console probably answered with an error."
+        )
+    if looks_like_text(dl.content):
+        raise RuntimeError("Download is plain text, not a backup file; not kept. The console probably answered with an error.")
 
+
+def write_durably(partial, target, content):
+    # Data to disk before the rename, so a power cut never leaves a complete
+    # name on an empty file; then the rename itself.
+    fd = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666)
+    with os.fdopen(fd, "wb") as handle:
+        handle.write(content)
+        handle.flush()
+        os.fsync(handle.fileno())
+    partial.replace(target)
+    try:
+        dir_fd = os.open(target.parent, os.O_RDONLY)
+    except OSError:  # a share that can't open a folder: the file itself is safe
+        return
+    try:
+        os.fsync(dir_fd)
+    except OSError:
+        pass
+    finally:
+        os.close(dir_fd)
+
+
+def store_download(dl, filename):
+    check_download(dl)
     target = BACKUP_DIR / filename
     # Written under a hidden name and renamed when complete: a run that dies
     # half-way leaves no partial backup that retention would count as one.
     partial = BACKUP_DIR / f".{filename}.partial"
     try:
-        partial.write_bytes(dl.content)
-        partial.replace(target)
+        write_durably(partial, target, dl.content)
     finally:
         partial.unlink(missing_ok=True)
     log(f"Saved {target} ({len(dl.content)} bytes).")
@@ -359,6 +478,22 @@ def expire(f, cutoff, run):
     return None
 
 
+def files_to_expire(pattern):
+    # Every file of one kind except the newest KEEP_NEWEST real backups.
+    # Files below MIN_BACKUP_BYTES (left by versions that kept error texts)
+    # don't count as backups and don't protect anything.
+    entries = []
+    for f in BACKUP_DIR.glob(pattern):
+        try:
+            st = f.stat()
+        except FileNotFoundError:
+            continue
+        entries.append((st.st_mtime, st.st_size >= MIN_BACKUP_BYTES, f))
+    entries.sort(key=lambda e: e[0], reverse=True)
+    protected = set(list(f for _, good, f in entries if good)[:KEEP_NEWEST])
+    return [f for _, _, f in entries if f not in protected]
+
+
 def apply_retention(run):
     now = time.time()
     run["retention_warnings"] = 0
@@ -372,7 +507,7 @@ def apply_retention(run):
         sizes = [
             expire(f, cutoff, run)
             for pattern in ("ucg-backup-*.unf", "ucg-system-backup-*")
-            for f in BACKUP_DIR.glob(pattern)
+            for f in files_to_expire(pattern)
         ]
         sizes = [size for size in sizes if size is not None]
         if sizes:
@@ -400,8 +535,22 @@ if __name__ == "__main__":
         print(VERSION)
         sys.exit(0)
     run = new_run()
+    if "--skipped" in sys.argv[1:]:
+        # Called by the cron wrapper when it has skipped runs in a row
+        # because an earlier one still holds the lock.
+        count = sys.argv[sys.argv.index("--skipped") + 1]
+        message = (
+            f"{count} backup runs in a row were skipped because an earlier run is still going. "
+            "It may be stuck; it ends itself after RUN_TIMEOUT. If this repeats, restart the container."
+        )
+        log(f"ERROR: {message}")
+        notify(False, message, run)
+        sys.exit(1)
     try:
-        main(run)
+        try:
+            main(run)
+        finally:
+            signal.alarm(0)  # the deadline is for the backup, not for the webhook after it
     except Exception as exc:  # noqa: BLE001 - top-level guard, must always notify+exit non-zero
         log(f"ERROR: {exc}")
         notify(False, str(exc) or type(exc).__name__, run)
