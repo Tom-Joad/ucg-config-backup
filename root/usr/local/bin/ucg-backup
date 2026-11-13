@@ -11,15 +11,17 @@ umask "${UMASK:-022}"
 # held on fd 9 through the exec below.
 # The wrapper's own messages are JSON lines like backup.py's (standards/runtime.md).
 log() { # level event [field=value ...]; values are plain text without quotes
-    local level=$1 event=$2 tz fields="" pair
+    local level=$1 event=$2 tz fields="" pair value
     shift 2
     tz=$(date +%z)
     if [[ ${tz} == +0000 ]]; then tz=Z; else tz="${tz:0:3}:${tz:3:2}"; fi
     for pair in "$@"; do
-        if [[ ${pair#*=} =~ ^[0-9]+$ ]]; then
-            fields+=",\"${pair%%=*}\":${pair#*=}"
+        value=${pair#*=}
+        if [[ ${value} =~ ^[0-9]+$ ]]; then
+            fields+=",\"${pair%%=*}\":${value}"
         else
-            fields+=",\"${pair%%=*}\":\"${pair#*=}\""
+            value=${value//\\/\\\\}
+            fields+=",\"${pair%%=*}\":\"${value//\"/\\\"}\""
         fi
     done
     printf '{"ts":"%s.000%s","level":"%s","event":"%s"%s}\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "${tz}" "${level}" "${event}" "${fields}"

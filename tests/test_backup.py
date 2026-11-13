@@ -944,3 +944,13 @@ def test_the_pinned_adapter_refuses_another_certificate_on_every_connection(tls_
     session.verify = False
     session.mount("https://", backup.PinnedAdapter())
     assert session.get(backup.BASE + "/api/backup/download", timeout=5).status_code == 200
+
+
+def test_a_pin_mismatch_is_logged_as_certificate_mismatch(tls_console):
+    fingerprint, folder = tls_console
+    out = run_entry_point({
+        "UCG_HOST": backup.HOST, "UCG_USERNAME": "u", "UCG_PASSWORD": "p", "UCG_SITE": "good", "UCG_CERT_SHA256": "cd" * 32,
+        "LOCAL_BACKUP_DIR": str(folder),
+    })
+    events = [json.loads(line) for line in out.stdout.splitlines()]
+    assert out.returncode == 1 and events[-1]["event"] == "certificate_mismatch"

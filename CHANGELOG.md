@@ -27,7 +27,8 @@ webhook payload) only comes with a new major version.
 ### Changed
 - Logging is JSON lines with `starting` as the first line of every run, as
   `standards/runtime.md` asks of Python apps. A wrong setting is logged as
-  `config_invalid`, a failed run as `run_failed`.
+  `config_invalid`, a failed run as `run_failed`, a certificate that does
+  not match the pin as `certificate_mismatch`.
 - The base image digest is the current `baseimage-alpine:3.24`.
 
 ### Fixed

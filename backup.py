@@ -129,6 +129,10 @@ class ConfigError(RuntimeError):
     """A setting is missing or wrong; logged as `config_invalid`."""
 
 
+class CertificateMismatch(RuntimeError):
+    """The console presents another certificate than the pinned one; logged as `certificate_mismatch`."""
+
+
 def log(event, level="INFO", always=False, **fields):
     # One JSON object per line, as standards/runtime.md asks of Python apps:
     # `ts` in local time with its offset (UTC prints as Z), `level`, `event`,
@@ -283,7 +287,7 @@ def check_console_certificate(session):
     if not CERT_SHA256:
         return
     if actual and actual != CERT_SHA256:
-        raise RuntimeError(
+        raise CertificateMismatch(
             f"The console's certificate does not match UCG_CERT_SHA256. Expected {colon_hex(CERT_SHA256)}, "
             f"got {colon_hex(actual)}. If the certificate was renewed on purpose, set the new fingerprint."
         )
@@ -637,8 +641,10 @@ if __name__ == "__main__":
         finally:
             signal.alarm(0)  # the deadline is for the backup, not for the webhook after it
     except Exception as exc:  # noqa: BLE001 - top-level guard, must always notify+exit non-zero
-        log("config_invalid" if isinstance(exc, ConfigError) else "run_failed", "ERROR", error=str(exc) or type(exc).__name__)
-        notify(False, str(exc) or type(exc).__name__, run)
+        message = str(exc) or type(exc).__name__
+        event = {ConfigError: "config_invalid", CertificateMismatch: "certificate_mismatch"}.get(type(exc), "run_failed")
+        log(event, "ERROR", error=message)
+        notify(False, message, run)
         sys.exit(1)
     if NOTIFY_ON_SUCCESS:
         notify(True, success_message(run), run)
