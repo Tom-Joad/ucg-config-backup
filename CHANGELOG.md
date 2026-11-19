@@ -5,6 +5,12 @@ All notable changes to this project are listed here. Versions follow
 upgrading (a renamed or removed setting, a different folder layout, a changed
 webhook payload) only comes with a new major version.
 
+## [2.4.1] - 2026-11-19
+
+### Security
+- Security updates of the distribution packages, picked up by rebuilding the image:
+  - `libssl3` 3.5.9-r1 (CVE-2026-107496, CVE-2026-88822, CVE-2026-88823, CVE-2026-95691, CVE-2026-95692)
+
 ## [2.4.0] - 2026-11-13
 
 ### Upgrading
@@ -303,6 +309,7 @@ webhook payload) only comes with a new major version.
 Initial release: local-API backup flow, cron scheduling, retention, webhook
 notifications, multi-arch image, Unraid and Synology documentation.
 
+[2.4.1]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.4.0...v2.4.1
 [2.4.0]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.2.8...v2.3.0
 [2.2.8]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.2.7...v2.2.8
