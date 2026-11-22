@@ -165,11 +165,17 @@ BACKUP_DIR="${LOCAL_BACKUP_DIR:-/backups}"
 mkdir -p "${BACKUP_DIR}"
 
 # A folder Docker created itself (missing host path, fresh volume) belongs
-# to root and abc couldn't write the backups. One that already belongs to
-# someone else is left as it is. Not recursive: a large backup folder would
-# make every start slow.
+# to root, with mode 755, and abc couldn't write the backups. Hand it over
+# and give it the mode UMASK asks for, or the group could not delete what the
+# backups leave there. UMASK comes from the environment: the base image
+# applies it to services only, not to this step. One that already belongs to
+# someone else is left as it is, owner and mode. Not recursive: a large
+# backup folder would make every start slow.
 if [[ $(stat -c %u "${BACKUP_DIR}") == 0 ]]; then
     lsiown abc:abc "${BACKUP_DIR}"
+    MASK=${UMASK:-022}
+    [[ ${MASK} =~ ^[0-7]{1,4}$ ]] || MASK=022
+    chmod "$(printf '%o' $(( 0777 & ~0${MASK} )))" "${BACKUP_DIR}"
 fi
 
 # The job runs from root's crontab so its output reaches the container log

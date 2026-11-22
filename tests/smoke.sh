@@ -99,25 +99,32 @@ wait_for_log() { # pattern
     fail "no log line matching '$1'"
 }
 
+# Starts a container on a fresh /backups folder owned by OWNER with mode MODE
+# and UMASK as given, and checks owner and mode once the init step is done.
 # Docker creates a missing host folder as root. The test makes one the same
 # way, through a container: a folder the calling user creates already belongs
 # to PUID and would never reach the hand-over.
-echo "== a root-owned backup folder is handed to PUID"
-docker run --rm --entrypoint sh -v "$WORK:/w" "$IMAGE" -c 'mkdir /w/rootdir && chown 0:0 /w/rootdir'
-[[ $(stat -c %u "$WORK/rootdir") == 0 ]] || fail "the test folder is not root-owned"
-docker run -d --name "$NAME" -e PUID="$PUID" -e PGID="$PGID" -e UCG_HOST=x -e UCG_USERNAME=x -e UCG_PASSWORD=x \
-    -e RUN_ON_START=false -v "$WORK/rootdir:/backups" "$IMAGE" >/dev/null
-wait_for_log '\[ls\.io-init\] done'
-[[ $(stat -c %u "$WORK/rootdir") == "$PUID" ]] || fail "a root-owned /backups was not handed to PUID"
-docker rm -f "$NAME" >/dev/null
+check_backup_dir() {
+    local dir=$1 owner=$2 mode=$3 umask=$4 want_owner=$5 want_mode=$6
+    docker run --rm --entrypoint sh -v "$WORK:/w" "$IMAGE" -c "mkdir /w/$dir && chown $owner /w/$dir && chmod $mode /w/$dir"
+    docker run -d --name "$NAME" -e PUID="$PUID" -e PGID="$PGID" -e UCG_HOST=x -e UCG_USERNAME=x -e UCG_PASSWORD=x \
+        -e UMASK="$umask" -e RUN_ON_START=false -v "$WORK/$dir:/backups" "$IMAGE" >/dev/null
+    wait_for_log '\[ls\.io-init\] done'
+    [[ $(stat -c %u "$WORK/$dir") == "$want_owner" ]] || fail "$dir: owner is $(stat -c %u "$WORK/$dir"), not $want_owner"
+    [[ $(stat -c %a "$WORK/$dir") == "$want_mode" ]] || fail "$dir: mode is $(stat -c %a "$WORK/$dir"), not $want_mode"
+    docker rm -f "$NAME" >/dev/null
+}
 
-echo "== a backup folder of another user is left alone"
-docker run --rm --entrypoint sh -v "$WORK:/w" "$IMAGE" -c 'mkdir /w/otherdir && chown 4242:4242 /w/otherdir'
-docker run -d --name "$NAME" -e PUID="$PUID" -e PGID="$PGID" -e UCG_HOST=x -e UCG_USERNAME=x -e UCG_PASSWORD=x \
-    -e RUN_ON_START=false -v "$WORK/otherdir:/backups" "$IMAGE" >/dev/null
-wait_for_log '\[ls\.io-init\] done'
-[[ $(stat -c %u "$WORK/otherdir") == 4242 ]] || fail "a /backups of another user was changed"
-docker rm -f "$NAME" >/dev/null
+echo "== a root-owned backup folder is handed to PUID with the mode UMASK=002 asks for"
+check_backup_dir rootdir 0:0 755 002 "$PUID" 775
+
+# The backups hold a router configuration: the folder gets what UMASK asks
+# for and not a bit more.
+echo "== a handed-over backup folder gets the mode UMASK=077 asks for"
+check_backup_dir rootdir077 0:0 755 077 "$PUID" 700
+
+echo "== a backup folder of another user is left alone, owner and mode"
+check_backup_dir otherdir 4242:4242 750 002 4242 750
 
 # The wrapper drops to abc and gives it a HOME it can read. A stand-in for
 # backup.py reports who runs it; the real one needs a console.
