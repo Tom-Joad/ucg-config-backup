@@ -5,7 +5,7 @@ All notable changes to this project are listed here. Versions follow
 upgrading (a renamed or removed setting, a different folder layout, a changed
 webhook payload) only comes with a new major version.
 
-## [Unreleased]
+## [2.4.2] - 2026-11-22
 
 ### Fixed
 - When Docker created the backup folder itself (a missing host path, a fresh
@@ -15,6 +15,10 @@ webhook payload) only comes with a new major version.
   (`775` with `UMASK=002`, `700` with `UMASK=077`). This only affects folders
   created from now on: for an existing one run `chmod 775 <folder>` or use
   Unraid's New Permissions.
+
+### Changed
+- Updated dependencies:
+  - linuxserver/baseimage-alpine from `7315b19` to `9c6e385`
 
 ## [2.4.1] - 2026-11-19
 
@@ -320,6 +324,7 @@ webhook payload) only comes with a new major version.
 Initial release: local-API backup flow, cron scheduling, retention, webhook
 notifications, multi-arch image, Unraid and Synology documentation.
 
+[2.4.2]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.4.1...v2.4.2
 [2.4.1]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.4.0...v2.4.1
 [2.4.0]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.2.8...v2.3.0
