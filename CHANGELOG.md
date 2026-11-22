@@ -5,6 +5,17 @@ All notable changes to this project are listed here. Versions follow
 upgrading (a renamed or removed setting, a different folder layout, a changed
 webhook payload) only comes with a new major version.
 
+## [Unreleased]
+
+### Fixed
+- When Docker created the backup folder itself (a missing host path, a fresh
+  volume), the folder was handed to `PUID` but kept mode `755`. The backups
+  were group-writable with `UMASK=002`, yet the group could not delete or move
+  them, for example over SMB. The folder now gets the mode `UMASK` asks for
+  (`775` with `UMASK=002`, `700` with `UMASK=077`). This only affects folders
+  created from now on: for an existing one run `chmod 775 <folder>` or use
+  Unraid's New Permissions.
+
 ## [2.4.1] - 2026-11-19
 
 ### Security

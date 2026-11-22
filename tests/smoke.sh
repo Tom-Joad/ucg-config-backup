@@ -106,17 +106,30 @@ echo "== a root-owned backup folder is handed to PUID"
 docker run --rm --entrypoint sh -v "$WORK:/w" "$IMAGE" -c 'mkdir /w/rootdir && chown 0:0 /w/rootdir'
 [[ $(stat -c %u "$WORK/rootdir") == 0 ]] || fail "the test folder is not root-owned"
 docker run -d --name "$NAME" -e PUID="$PUID" -e PGID="$PGID" -e UCG_HOST=x -e UCG_USERNAME=x -e UCG_PASSWORD=x \
-    -e RUN_ON_START=false -v "$WORK/rootdir:/backups" "$IMAGE" >/dev/null
+    -e UMASK=002 -e RUN_ON_START=false -v "$WORK/rootdir:/backups" "$IMAGE" >/dev/null
 wait_for_log '\[ls\.io-init\] done'
 [[ $(stat -c %u "$WORK/rootdir") == "$PUID" ]] || fail "a root-owned /backups was not handed to PUID"
+[[ $(stat -c %a "$WORK/rootdir") == 775 ]] || fail "a handed-over /backups is not 775 with UMASK=002 ($(stat -c %a "$WORK/rootdir"))"
+docker rm -f "$NAME" >/dev/null
+
+# The backups hold a router configuration: the folder gets what UMASK asks
+# for and not a bit more.
+echo "== a handed-over backup folder gets the mode UMASK=077 asks for"
+docker run --rm --entrypoint sh -v "$WORK:/w" "$IMAGE" -c 'mkdir /w/rootdir077 && chown 0:0 /w/rootdir077'
+docker run -d --name "$NAME" -e PUID="$PUID" -e PGID="$PGID" -e UCG_HOST=x -e UCG_USERNAME=x -e UCG_PASSWORD=x \
+    -e UMASK=077 -e RUN_ON_START=false -v "$WORK/rootdir077:/backups" "$IMAGE" >/dev/null
+wait_for_log '\[ls\.io-init\] done'
+[[ $(stat -c %u "$WORK/rootdir077") == "$PUID" ]] || fail "a root-owned /backups was not handed to PUID with UMASK=077"
+[[ $(stat -c %a "$WORK/rootdir077") == 700 ]] || fail "a handed-over /backups is not 700 with UMASK=077 ($(stat -c %a "$WORK/rootdir077"))"
 docker rm -f "$NAME" >/dev/null
 
 echo "== a backup folder of another user is left alone"
-docker run --rm --entrypoint sh -v "$WORK:/w" "$IMAGE" -c 'mkdir /w/otherdir && chown 4242:4242 /w/otherdir'
+docker run --rm --entrypoint sh -v "$WORK:/w" "$IMAGE" -c 'mkdir /w/otherdir && chown 4242:4242 /w/otherdir && chmod 750 /w/otherdir'
 docker run -d --name "$NAME" -e PUID="$PUID" -e PGID="$PGID" -e UCG_HOST=x -e UCG_USERNAME=x -e UCG_PASSWORD=x \
-    -e RUN_ON_START=false -v "$WORK/otherdir:/backups" "$IMAGE" >/dev/null
+    -e UMASK=002 -e RUN_ON_START=false -v "$WORK/otherdir:/backups" "$IMAGE" >/dev/null
 wait_for_log '\[ls\.io-init\] done'
 [[ $(stat -c %u "$WORK/otherdir") == 4242 ]] || fail "a /backups of another user was changed"
+[[ $(stat -c %a "$WORK/otherdir") == 750 ]] || fail "the mode of a /backups of another user was changed ($(stat -c %a "$WORK/otherdir"))"
 docker rm -f "$NAME" >/dev/null
 
 # The wrapper drops to abc and gives it a HOME it can read. A stand-in for
