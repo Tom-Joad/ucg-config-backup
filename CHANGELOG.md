@@ -5,6 +5,12 @@ All notable changes to this project are listed here. Versions follow
 upgrading (a renamed or removed setting, a different folder layout, a changed
 webhook payload) only comes with a new major version.
 
+## [2.4.3] - 2026-11-24
+
+### Security
+- Security updates of the distribution packages, picked up by rebuilding the image:
+  - `python3` 3.14.10-r2
+
 ## [2.4.2] - 2026-11-22
 
 ### Fixed
@@ -324,6 +330,7 @@ webhook payload) only comes with a new major version.
 Initial release: local-API backup flow, cron scheduling, retention, webhook
 notifications, multi-arch image, Unraid and Synology documentation.
 
+[2.4.3]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.4.2...v2.4.3
 [2.4.2]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.4.1...v2.4.2
 [2.4.1]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.4.0...v2.4.1
 [2.4.0]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.3.0...v2.4.0
