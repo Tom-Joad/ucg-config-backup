@@ -15,6 +15,9 @@ webhook payload) only comes with a new major version.
   `NETWORK_BACKUP` and `SYSTEM_BACKUP` to `false` stops the container.
   Unraid: add the variable with **Add another Path, Port, Variable, Label
   or Device** if you need it.
+- A `404` from the Network backup command now says that the console may not
+  run the Network application, or that `UCG_SITE` is wrong, instead of a
+  bare HTTP error.
 
 ## [2.4.3] - 2026-11-24
 

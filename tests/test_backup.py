@@ -437,10 +437,9 @@ def test_network_backup_can_be_switched_off_for_a_console_without_the_network_ap
     assert first["network_backup"] is False
 
 
-@pytest.mark.parametrize("status", [404, 502])
-def test_a_console_without_the_network_app_points_to_network_backup_false(settings, monkeypatch, status):
-    monkeypatch.setattr(requests, "Session", lambda: FakeSession(backup_status=status))
-    with pytest.raises(RuntimeError, match=rf"not answered \({status}\).*NETWORK_BACKUP=false"):
+def test_a_console_without_the_network_app_points_to_network_backup_false(settings, monkeypatch):
+    monkeypatch.setattr(requests, "Session", lambda: FakeSession(backup_status=404))
+    with pytest.raises(RuntimeError, match=r"not found \(404\).*UCG_SITE.*NETWORK_BACKUP=false"):
         backup.main(new_run())
     assert not list(settings.iterdir())
 
@@ -718,8 +717,8 @@ def test_the_starting_line_comes_first_and_shows_settings_but_no_secrets(setting
     lines = capsys.readouterr().out.splitlines()
     first = json.loads(lines[0])
     assert first["event"] == "starting" and first["version"] == backup.VERSION and first["level"] == "INFO"
-    expected = {"host": "192.0.2.1", "site": "default", "retention_days": 30, "webhook": "set", "network_backup": True, "system_backup": True,
-                "cert_pin": "off", "log_level": "INFO"}
+    expected = {"host": "192.0.2.1", "site": "default", "retention_days": 30, "webhook": "set",
+                "network_backup": True, "system_backup": True, "cert_pin": "off", "log_level": "INFO"}
     assert {k: first[k] for k in expected} == expected
     assert "secret" not in "".join(lines)
 

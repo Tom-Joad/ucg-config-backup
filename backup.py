@@ -441,14 +441,12 @@ def save_backup(session, run):
             "rights on the Network application (e.g. it's a Limited Admin or View Only "
             "role) -- grant it full management access and try again."
         )
-    if resp.status_code in (404, 502):
-        # What UniFi OS answers for an application it doesn't run, or one
-        # that is not up right now.
+    if resp.status_code == 404:
+        # What UniFi OS answers for an application it doesn't run.
         raise RuntimeError(
-            f"Backup command not answered ({resp.status_code}): the console may not run the Network "
-            "application (a UniFi NVR with Protect, for example), or it isn't running right now, or "
-            "UCG_SITE is not a site on it. On a console without it, set NETWORK_BACKUP=false to save "
-            "the system backup only."
+            "Backup command not found (404): the console may not run the Network application (a UniFi "
+            "NVR with Protect, for example), or UCG_SITE is not a site on it. On a console without the "
+            "Network application, set NETWORK_BACKUP=false to save the system backup only."
         )
     resp.raise_for_status()
     refresh_csrf(session, resp)
@@ -489,7 +487,7 @@ def save_system_backup(session, run):
             reason = "UCG_USERNAME may not be allowed to download it, it needs full rights on the console itself"
         hint = (
             "The Network backup of this run is saved. Set SYSTEM_BACKUP=false to back up the Network application only."
-            if NETWORK_BACKUP else "Nothing was saved in this run."
+            if run["filename"] else "Nothing was saved in this run."
         )
         raise RuntimeError(f"System backup download rejected ({dl.status_code}): {reason}. {hint}")
     dl.raise_for_status()
