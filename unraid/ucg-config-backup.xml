@@ -26,6 +26,7 @@
   <Config Name="UCG_USERNAME" Target="UCG_USERNAME" Default="" Mode="" Description="Local admin user dedicated to backups (no cloud/SSO account, no 2FA)" Type="Variable" Display="always" Required="true" Mask="false"/>
   <Config Name="UCG_PASSWORD" Target="UCG_PASSWORD" Default="" Mode="" Description="Password of that user" Type="Variable" Display="always" Required="true" Mask="true"/>
   <Config Name="UCG_SITE" Target="UCG_SITE" Default="default" Mode="" Description="UniFi site name" Type="Variable" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="NETWORK_BACKUP" Target="NETWORK_BACKUP" Default="true" Mode="" Description="Save the Network application's backup (.unf); false on a console without the Network application, e.g. a UniFi NVR with Protect" Type="Variable" Display="advanced" Required="false" Mask="false"/>
   <Config Name="SYSTEM_BACKUP" Target="SYSTEM_BACKUP" Default="true" Mode="" Description="Also save the console's system backup (all applications and settings); false = Network backup only" Type="Variable" Display="advanced" Required="false" Mask="false"/>
   <Config Name="VERIFY_SSL" Target="VERIFY_SSL" Default="false" Mode="" Description="Check the console's TLS certificate (UniFi OS ships a self-signed one)" Type="Variable" Display="advanced" Required="false" Mask="false"/>
   <Config Name="CRON_SCHEDULE" Target="CRON_SCHEDULE" Default="0 3 * * *" Mode="" Description="When the backup runs (cron: minute hour day month weekday)" Type="Variable" Display="advanced" Required="false" Mask="false"/>

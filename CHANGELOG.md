@@ -5,6 +5,20 @@ All notable changes to this project are listed here. Versions follow
 upgrading (a renamed or removed setting, a different folder layout, a changed
 webhook payload) only comes with a new major version.
 
+## [Unreleased]
+
+### Added
+- `NETWORK_BACKUP` (`true` by default): `false` skips the Network
+  application's backup and saves only the console's system backup. This is
+  for consoles without the Network application, such as a UniFi NVR
+  running Protect, where every run failed so far. Setting both
+  `NETWORK_BACKUP` and `SYSTEM_BACKUP` to `false` stops the container.
+  Unraid: add the variable with **Add another Path, Port, Variable, Label
+  or Device** if you need it.
+- A `404` from the Network backup command now says that the console may not
+  run the Network application, or that `UCG_SITE` is wrong, instead of a
+  bare HTTP error.
+
 ## [2.4.3] - 2026-11-24
 
 ### Security
@@ -330,6 +344,7 @@ webhook payload) only comes with a new major version.
 Initial release: local-API backup flow, cron scheduling, retention, webhook
 notifications, multi-arch image, Unraid and Synology documentation.
 
+[Unreleased]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.4.3...HEAD
 [2.4.3]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.4.2...v2.4.3
 [2.4.2]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.4.1...v2.4.2
 [2.4.1]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.4.0...v2.4.1

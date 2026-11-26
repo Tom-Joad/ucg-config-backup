@@ -17,6 +17,10 @@ a mounted volume:
   It is part of the system backup, and it is the file a self-hosted
   UniFi Network server can restore.
 
+On a console without the Network application, such as a UniFi NVR running
+Protect, set `NETWORK_BACKUP=false` and only the system backup is saved, see
+[Consoles without the Network application](#consoles-without-the-network-application-unifi-nvr).
+
 Built on linuxserver.io's Alpine base image, with the usual `PUID`, `PGID`,
 `UMASK` and `TZ` settings.
 
@@ -24,6 +28,7 @@ Built on linuxserver.io's Alpine base image, with the usual `PUID`, `PGID`,
 
 * [How it works](#how-it-works)
 * [Prerequisites on the UCG Ultra](#prerequisites-on-the-ucg-ultra)
+  * [Consoles without the Network application (UniFi NVR)](#consoles-without-the-network-application-unifi-nvr)
 * [Supported architectures](#supported-architectures)
 * [Version tags](#version-tags)
 * [Usage](#usage)
@@ -55,6 +60,7 @@ at container start via `RUN_ON_START`) the container:
    `ucg-backup-<timestamp>.unf` into `/backups`. A download that turns out
    to be a web page, an error message or something far too small to be a
    backup (under 1 KiB) fails the run and is not kept.
+   `NETWORK_BACKUP=false` skips steps 2 and 3.
 4. Downloads the console's system backup (`/api/backup/download`) and
    saves it as `ucg-system-backup-<timestamp>.unifi`, with the same check.
    If the console refuses it, the run fails, and the Network backup from
@@ -85,6 +91,19 @@ give it the **Administrator** role with **full management** rights on the
 Network application (required for `cmd/backup`) and on the console itself
 (required for the system backup), and do **not** enable 2FA for this
 account.
+
+### Consoles without the Network application (UniFi NVR)
+
+A UniFi NVR (UNVR, UNVR Pro) running Protect has no Network application,
+so there is no `cmd/backup` to call and every run would fail. Set
+`NETWORK_BACKUP=false`: the container then saves only the console's system
+backup (`.unifi`), the same file as **Download Backup** under the console's
+settings. It holds the settings of all applications on the console,
+Protect included, but no recordings. The backup account needs full rights
+on the console itself.
+
+Consoles that run both Network and Protect (UDM-Pro, UDM-SE, UCG Max, ...)
+need no change: their system backup already includes Protect.
 
 ## Supported architectures
 
@@ -230,7 +249,8 @@ with it set.
 | `UCG_USERNAME` | yes | – | Local admin username (see [Prerequisites](#prerequisites-on-the-ucg-ultra)) |
 | `UCG_PASSWORD` | yes | – | Password for that account |
 | `UCG_SITE` | | `default` | UniFi site name (letters, digits, `-` and `_` only; anything else stops the container) |
-| `SYSTEM_BACKUP` | | `true` | `true` or `false`: also save the console's system backup (all applications and settings) next to the Network backup |
+| `NETWORK_BACKUP` | | `true` | `true` or `false`: save the Network application's backup (`.unf`). Set `false` on a console without the Network application, e.g. a [UniFi NVR](#consoles-without-the-network-application-unifi-nvr) |
+| `SYSTEM_BACKUP` | | `true` | `true` or `false`: also save the console's system backup (all applications and settings) next to the Network backup. `NETWORK_BACKUP` and `SYSTEM_BACKUP` can't both be `false` |
 | `VERIFY_SSL` | | `false` | `true` or `false` (any case; anything else stops the container): verify the console's TLS certificate (UniFi OS ships a self-signed cert by default) |
 | `CRON_SCHEDULE` | | `0 3 * * *` | Cron expression for the backup run (five fields, each inside its range, separated by spaces or tabs; anything else stops the container with an `ERROR:` line) |
 | `RETENTION_DAYS` | | `30` | Delete local backups older than N days (`0` = keep forever; anything but a whole number of 0 or more stops the container). The newest three backups of each kind are always kept |
@@ -282,8 +302,8 @@ and after a successful one too with `NOTIFY_ON_SUCCESS=true`.
 | --- | --- |
 | `status` | Always `ok` or `failed` (lowercase) — the value to trigger on |
 | `message` | Human-readable part: the filenames on success, the error on failure |
-| `filename` | Name of the saved Network backup (`.unf`) |
-| `size_bytes` | Size of that file — use it to catch empty or suspiciously small backups that still report `ok` |
+| `filename` | Name of the saved Network backup (`.unf`); `null` with `NETWORK_BACKUP=false` |
+| `size_bytes` | Size of that file — use it to catch empty or suspiciously small backups that still report `ok`; `null` with `NETWORK_BACKUP=false`, watch `system_size_bytes` then |
 | `duration_s` | Run duration in seconds |
 | `host`, `site` | `UCG_HOST` and `UCG_SITE` of the run |
 | `retention_days` | Effective `RETENTION_DAYS` |
@@ -405,8 +425,11 @@ belongs to someone else is left alone.
   didn't hand out its system backup. `401`/`403`: the account lacks rights
   on the console itself (see [Prerequisites](#prerequisites-on-the-ucg-ultra)).
   `404`: this UniFi OS version doesn't have the download. The Network
-  backup of the run is saved either way; `SYSTEM_BACKUP=false` turns the
-  system backup off.
+  backup of the run is saved either way (with `NETWORK_BACKUP=false` the
+  run saved nothing); `SYSTEM_BACKUP=false` turns the system backup off.
+* **`Backup command not found (404)`** — the console has no Network
+  application (a UniFi NVR), or `UCG_SITE` is wrong. On an NVR set `NETWORK_BACKUP=false`, see
+  [Consoles without the Network application](#consoles-without-the-network-application-unifi-nvr).
 * **`Unexpected backup response, no download URL`** — the API response
   shape can differ slightly between firmware versions; check the log
   (`docker logs ucg-config-backup`) and verify `UCG_SITE` (the site name
