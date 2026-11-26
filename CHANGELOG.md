@@ -5,7 +5,7 @@ All notable changes to this project are listed here. Versions follow
 upgrading (a renamed or removed setting, a different folder layout, a changed
 webhook payload) only comes with a new major version.
 
-## [Unreleased]
+## [2.5.0] - 2026-11-26
 
 ### Added
 - `NETWORK_BACKUP` (`true` by default): `false` skips the Network
@@ -344,7 +344,7 @@ webhook payload) only comes with a new major version.
 Initial release: local-API backup flow, cron scheduling, retention, webhook
 notifications, multi-arch image, Unraid and Synology documentation.
 
-[Unreleased]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.4.3...HEAD
+[2.5.0]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.4.3...v2.5.0
 [2.4.3]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.4.2...v2.4.3
 [2.4.2]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.4.1...v2.4.2
 [2.4.1]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.4.0...v2.4.1
