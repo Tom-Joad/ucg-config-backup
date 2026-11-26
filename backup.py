@@ -6,7 +6,9 @@ System Backups" on UniFi OS requires the console to be connected to
 Ubiquiti's cloud. This talks to the same local API the console's own
 "Download Backup" buttons use, so it works fully offline/local-only. Two
 files are saved per run: the Network application's backup (.unf) and the
-console's system backup for all applications and settings (.unifi).
+console's system backup for all applications and settings (.unifi). Either
+one can be switched off, e.g. the Network backup on a console without the
+Network application (a UniFi NVR running Protect).
 """
 import datetime
 import hashlib
@@ -62,6 +64,7 @@ if RETENTION_DAYS is not None and RETENTION_DAYS < 0:
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "").strip()
 WEBHOOK_FORMAT = os.environ.get("WEBHOOK_FORMAT", "text").strip().lower() or "text"
 NOTIFY_ON_SUCCESS = read_bool("NOTIFY_ON_SUCCESS", "false")
+NETWORK_BACKUP = read_bool("NETWORK_BACKUP", "true")
 SYSTEM_BACKUP = read_bool("SYSTEM_BACKUP", "true")
 
 LOG_LEVELS = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40}
@@ -230,6 +233,7 @@ def effective_settings():
         "host": HOST or None, "site": SITE, "user": USERNAME or None,
         "verify_ssl": VERIFY_SSL if VERIFY_SSL is not None else "invalid",
         "cert_pin": "set" if CERT_SHA256 else shown("off", CERT_SHA256 is not None),
+        "network_backup": NETWORK_BACKUP if NETWORK_BACKUP is not None else "invalid",
         "system_backup": SYSTEM_BACKUP if SYSTEM_BACKUP is not None else "invalid",
         "retention_days": shown(RETENTION_DAYS), "run_timeout": shown(RUN_TIMEOUT),
         "webhook": "set" if WEBHOOK_URL else "off",
@@ -306,12 +310,15 @@ def main(run):
         raise ConfigError(f"Missing required setting(s): {', '.join(missing)}")
     bad_bools = [
         name for name, value in (
-            ("VERIFY_SSL", VERIFY_SSL), ("NOTIFY_ON_SUCCESS", NOTIFY_ON_SUCCESS), ("SYSTEM_BACKUP", SYSTEM_BACKUP),
+            ("VERIFY_SSL", VERIFY_SSL), ("NOTIFY_ON_SUCCESS", NOTIFY_ON_SUCCESS),
+            ("NETWORK_BACKUP", NETWORK_BACKUP), ("SYSTEM_BACKUP", SYSTEM_BACKUP),
         )
         if value is None
     ]
     if bad_bools:
         raise ConfigError(f"{' and '.join(bad_bools)} must be 'true' or 'false'")
+    if not NETWORK_BACKUP and not SYSTEM_BACKUP:
+        raise ConfigError("NETWORK_BACKUP and SYSTEM_BACKUP are both 'false', so there is nothing to back up")
     if LOG_LEVEL not in LOG_LEVELS:
         raise ConfigError(f"LOG_LEVEL must be one of {', '.join(LOG_LEVELS)}, got '{LOG_LEVEL}'")
     if CERT_SHA256 is None:
@@ -339,7 +346,8 @@ def main(run):
     # Logged out on every path, so a failed run leaves no session open on
     # the console.
     try:
-        save_backup(session, run)
+        if NETWORK_BACKUP:
+            save_backup(session, run)
         if SYSTEM_BACKUP:
             save_system_backup(session, run)
     finally:
@@ -433,6 +441,14 @@ def save_backup(session, run):
             "rights on the Network application (e.g. it's a Limited Admin or View Only "
             "role) -- grant it full management access and try again."
         )
+    if resp.status_code in (404, 502):
+        # What UniFi OS answers for an application it doesn't run, or one
+        # that is not up right now.
+        raise RuntimeError(
+            f"Backup command not answered ({resp.status_code}): the console may not run the Network "
+            "application (a UniFi NVR with Protect, for example), or it isn't running right now. On a "
+            "console without it, set NETWORK_BACKUP=false to save the system backup only."
+        )
     resp.raise_for_status()
     refresh_csrf(session, resp)
     download_path = backup_download_path(resp)
@@ -461,8 +477,8 @@ def system_backup_suffix(resp):
 
 def save_system_backup(session, run):
     # The "Download Backup" button of the console itself ("Backup for All
-    # Applications and Settings"). The Network backup above is already saved
-    # when this fails.
+    # Applications and Settings"). The Network backup above, if any, is
+    # already saved when this fails.
     log("system_download_started", "DEBUG")
     dl = session.get(f"{BASE}/api/backup/download", timeout=SYSTEM_BACKUP_TIMEOUT)
     if dl.status_code in (401, 403, 404):
@@ -470,10 +486,11 @@ def save_system_backup(session, run):
             reason = "this console does not offer it, its UniFi OS may be too old"
         else:
             reason = "UCG_USERNAME may not be allowed to download it, it needs full rights on the console itself"
-        raise RuntimeError(
-            f"System backup download rejected ({dl.status_code}): {reason}. The Network backup of this "
-            "run is saved. Set SYSTEM_BACKUP=false to back up the Network application only."
+        hint = (
+            "The Network backup of this run is saved. Set SYSTEM_BACKUP=false to back up the Network application only."
+            if NETWORK_BACKUP else "Nothing was saved in this run."
         )
+        raise RuntimeError(f"System backup download rejected ({dl.status_code}): {reason}. {hint}")
     dl.raise_for_status()
     filename = f"ucg-system-backup-{datetime.datetime.now():%Y%m%d-%H%M%S}{system_backup_suffix(dl)}"
     run["system_filename"] = store_download(dl, filename)

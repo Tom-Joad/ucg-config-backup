@@ -70,6 +70,9 @@ expect_stop "a schedule with a line break" 'ERROR: CRON_SCHEDULE must have five'
 expect_stop "VERIFY_SSL=yes" "ERROR: VERIFY_SSL must be 'true' or 'false'" -e VERIFY_SSL=yes
 expect_stop "NOTIFY_ON_SUCCESS=1" "ERROR: NOTIFY_ON_SUCCESS must be" -e NOTIFY_ON_SUCCESS=1
 expect_stop "SYSTEM_BACKUP=yes" "ERROR: SYSTEM_BACKUP must be" -e SYSTEM_BACKUP=yes
+expect_stop "NETWORK_BACKUP=no" "ERROR: NETWORK_BACKUP must be" -e NETWORK_BACKUP=no
+expect_stop "both backups switched off" "ERROR: NETWORK_BACKUP and SYSTEM_BACKUP are both 'false'" \
+    -e NETWORK_BACKUP=false -e SYSTEM_BACKUP=False
 expect_stop "RUN_ON_START=on" "ERROR: RUN_ON_START must be" -e RUN_ON_START=on
 expect_stop "LOG_LEVEL=LOUD" 'ERROR: LOG_LEVEL must be' -e LOG_LEVEL=LOUD
 expect_stop "a malformed UCG_CERT_SHA256" 'ERROR: UCG_CERT_SHA256 must be' -e UCG_CERT_SHA256=abc123

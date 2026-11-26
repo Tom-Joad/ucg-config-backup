@@ -31,13 +31,20 @@ setting() {
     printf '%s' "${value}"
 }
 
-for name in VERIFY_SSL NOTIFY_ON_SUCCESS RUN_ON_START SYSTEM_BACKUP; do
+for name in VERIFY_SSL NOTIFY_ON_SUCCESS RUN_ON_START NETWORK_BACKUP SYSTEM_BACKUP; do
     value=$(setting "${name}")
     if [[ -n ${value} && ${value,,} != true && ${value,,} != false ]]; then
         echo "ERROR: ${name} must be 'true' or 'false', got '${value}'" >&2
         failed=1
     fi
 done
+
+network=$(setting NETWORK_BACKUP)
+system=$(setting SYSTEM_BACKUP)
+if [[ ${network,,} == false && ${system,,} == false ]]; then
+    echo "ERROR: NETWORK_BACKUP and SYSTEM_BACKUP are both 'false', so there is nothing to back up" >&2
+    failed=1
+fi
 
 value=$(setting RETENTION_DAYS)
 if [[ -n ${value} && ! ${value} =~ ^[0-9]+$ ]]; then

@@ -368,7 +368,7 @@ def test_read_bool_uses_the_default_when_unset(monkeypatch):
     assert backup.read_bool("SOME_FLAG", "true") is True
 
 
-@pytest.mark.parametrize("name", ["VERIFY_SSL", "NOTIFY_ON_SUCCESS", "SYSTEM_BACKUP"])
+@pytest.mark.parametrize("name", ["VERIFY_SSL", "NOTIFY_ON_SUCCESS", "NETWORK_BACKUP", "SYSTEM_BACKUP"])
 def test_main_rejects_a_boolean_that_is_not_true_or_false(settings, monkeypatch, name):
     monkeypatch.setattr(backup, name, None)
     with pytest.raises(RuntimeError, match=f"{name} must be 'true' or 'false'"):
@@ -417,6 +417,50 @@ def test_system_backup_can_be_switched_off(settings, monkeypatch):
     assert run["system_backups_kept"] == 0
     assert not [c for c in session.calls if c[1].endswith("/api/backup/download")]
     assert not list(settings.glob("ucg-system-backup-*"))
+
+
+def test_network_backup_can_be_switched_off_for_a_console_without_the_network_app(settings, monkeypatch, capsys):
+    # A UniFi NVR running Protect has no Network application: cmd/backup
+    # must not be called at all, the system backup alone makes the run.
+    session = FakeSession(backup_status=404)
+    monkeypatch.setattr(requests, "Session", lambda: session)
+    monkeypatch.setattr(backup, "NETWORK_BACKUP", False)
+    run = new_run()
+    backup.main(run)
+    assert run["filename"] is None and run["size_bytes"] is None
+    assert (settings / run["system_filename"]).read_bytes() == SYSTEM_DATA
+    assert run["backups_kept"] == 0 and run["system_backups_kept"] == 1
+    assert not [c for c in session.calls if c[1].endswith("/cmd/backup")]
+    assert session.calls[-1] == ("POST", "https://192.0.2.1/api/auth/logout")
+    assert backup.success_message(run) == run["system_filename"]
+    first = json.loads(capsys.readouterr().out.splitlines()[0])
+    assert first["network_backup"] is False
+
+
+@pytest.mark.parametrize("status", [404, 502])
+def test_a_console_without_the_network_app_points_to_network_backup_false(settings, monkeypatch, status):
+    monkeypatch.setattr(requests, "Session", lambda: FakeSession(backup_status=status))
+    with pytest.raises(RuntimeError, match=rf"not answered \({status}\).*NETWORK_BACKUP=false"):
+        backup.main(new_run())
+    assert not list(settings.iterdir())
+
+
+def test_main_rejects_both_backups_switched_off(settings, monkeypatch):
+    session = FakeSession()
+    monkeypatch.setattr(requests, "Session", lambda: session)
+    monkeypatch.setattr(backup, "NETWORK_BACKUP", False)
+    monkeypatch.setattr(backup, "SYSTEM_BACKUP", False)
+    with pytest.raises(backup.ConfigError, match="NETWORK_BACKUP and SYSTEM_BACKUP are both 'false'"):
+        backup.main(new_run())
+    assert session.calls == []
+
+
+def test_a_rejected_system_backup_without_network_backup_says_nothing_was_saved(settings, monkeypatch):
+    monkeypatch.setattr(requests, "Session", lambda: FakeSession(system_status=403))
+    monkeypatch.setattr(backup, "NETWORK_BACKUP", False)
+    with pytest.raises(RuntimeError, match=r"rejected \(403\).*Nothing was saved in this run\.$"):
+        backup.main(new_run())
+    assert not list(settings.iterdir())
 
 
 @pytest.mark.parametrize("status,hint", [(403, "full rights on the console"), (401, "full rights"), (404, "too old")])
@@ -674,7 +718,7 @@ def test_the_starting_line_comes_first_and_shows_settings_but_no_secrets(setting
     lines = capsys.readouterr().out.splitlines()
     first = json.loads(lines[0])
     assert first["event"] == "starting" and first["version"] == backup.VERSION and first["level"] == "INFO"
-    expected = {"host": "192.0.2.1", "site": "default", "retention_days": 30, "webhook": "set", "system_backup": True,
+    expected = {"host": "192.0.2.1", "site": "default", "retention_days": 30, "webhook": "set", "network_backup": True, "system_backup": True,
                 "cert_pin": "off", "log_level": "INFO"}
     assert {k: first[k] for k in expected} == expected
     assert "secret" not in "".join(lines)
