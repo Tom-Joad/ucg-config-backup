@@ -303,7 +303,7 @@ and after a successful one too with `NOTIFY_ON_SUCCESS=true`.
 | `status` | Always `ok` or `failed` (lowercase) — the value to trigger on |
 | `message` | Human-readable part: the filenames on success, the error on failure |
 | `filename` | Name of the saved Network backup (`.unf`); `null` with `NETWORK_BACKUP=false` |
-| `size_bytes` | Size of that file — use it to catch empty or suspiciously small backups that still report `ok` |
+| `size_bytes` | Size of that file — use it to catch empty or suspiciously small backups that still report `ok`; `null` with `NETWORK_BACKUP=false` |
 | `duration_s` | Run duration in seconds |
 | `host`, `site` | `UCG_HOST` and `UCG_SITE` of the run |
 | `retention_days` | Effective `RETENTION_DAYS` |
@@ -425,10 +425,11 @@ belongs to someone else is left alone.
   didn't hand out its system backup. `401`/`403`: the account lacks rights
   on the console itself (see [Prerequisites](#prerequisites-on-the-ucg-ultra)).
   `404`: this UniFi OS version doesn't have the download. The Network
-  backup of the run is saved either way; `SYSTEM_BACKUP=false` turns the
-  system backup off.
+  backup of the run is saved either way (with `NETWORK_BACKUP=false` the
+  run saved nothing); `SYSTEM_BACKUP=false` turns the system backup off.
 * **`Backup command not answered (404/502)`** — the console has no
-  Network application (a UniFi NVR), or it isn't running right now. Set `NETWORK_BACKUP=false`, see
+  Network application (a UniFi NVR), it isn't running right now, or
+  `UCG_SITE` is wrong. On an NVR set `NETWORK_BACKUP=false`, see
   [Consoles without the Network application](#consoles-without-the-network-application-unifi-nvr).
 * **`Unexpected backup response, no download URL`** — the API response
   shape can differ slightly between firmware versions; check the log

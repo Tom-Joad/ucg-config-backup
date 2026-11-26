@@ -446,8 +446,9 @@ def save_backup(session, run):
         # that is not up right now.
         raise RuntimeError(
             f"Backup command not answered ({resp.status_code}): the console may not run the Network "
-            "application (a UniFi NVR with Protect, for example), or it isn't running right now. On a "
-            "console without it, set NETWORK_BACKUP=false to save the system backup only."
+            "application (a UniFi NVR with Protect, for example), or it isn't running right now, or "
+            "UCG_SITE is not a site on it. On a console without it, set NETWORK_BACKUP=false to save "
+            "the system backup only."
         )
     resp.raise_for_status()
     refresh_csrf(session, resp)
