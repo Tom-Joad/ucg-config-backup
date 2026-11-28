@@ -28,7 +28,7 @@ import requests
 import requests.adapters
 import urllib3
 
-VERSION = "2.5.0"
+VERSION = "2.6.0"
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
