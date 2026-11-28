@@ -18,6 +18,7 @@ import pathlib
 import re
 import signal
 import socket
+import stat
 import ssl
 import sys
 import time
@@ -36,13 +37,40 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # level may raise: a broken environment has to reach the top-level guard
 # below so it still gets reported via the webhook.
 
+# One process backs up one console. With several consoles configured, the
+# wrapper runs this script once per console and sets UCG_CONSOLE to its
+# number; unset, there is only one console. Console 1 reads the settings
+# without a suffix, console N (2 or more) the same names ending in _N.
+CONSOLE_SET = os.environ.get("UCG_CONSOLE", "").strip()
+MULTI = bool(CONSOLE_SET)
+if not CONSOLE_SET:
+    CONSOLE = 1
+elif re.fullmatch(r"[1-9][0-9]{0,3}", CONSOLE_SET):
+    CONSOLE = int(CONSOLE_SET)
+else:
+    CONSOLE = None  # rejected in main()
+SUFFIX = f"_{CONSOLE}" if CONSOLE and CONSOLE > 1 else ""
+
+
+def var(name):
+    # The name of a per-console setting for the console of this run.
+    return name + SUFFIX
+
+
 # Trimmed like the init step does, so a value the container accepted also works here.
-HOST = os.environ.get("UCG_HOST", "").strip()
-USERNAME = os.environ.get("UCG_USERNAME", "")
-PASSWORD = os.environ.get("UCG_PASSWORD", "")
-SITE = os.environ.get("UCG_SITE", "").strip() or "default"
-# The site goes into a URL path: only the characters a UniFi site name has.
+HOST = os.environ.get(var("UCG_HOST"), "").strip()
+USERNAME = os.environ.get(var("UCG_USERNAME"), "")
+PASSWORD = os.environ.get(var("UCG_PASSWORD"), "")
+SITE = os.environ.get(var("UCG_SITE"), "").strip() or "default"
+# The site goes into a URL path, the console's name into a folder name: only
+# the characters a UniFi site name has.
 SITE_RE = re.compile(r"[A-Za-z0-9_-]+")
+# The folder below /backups; console 1 writes to /backups itself unless it
+# has a name.
+NAME = os.environ.get(var("UCG_NAME"), "").strip() or (f"console-{CONSOLE}" if SUFFIX else "")
+# How webhooks and the log name the console: not at all for a single console
+# without a name, so its messages stay as they were before several consoles.
+LABEL = (NAME or f"console-{CONSOLE_SET}") if MULTI or NAME else None
 
 
 def read_bool(name, default):
@@ -53,8 +81,8 @@ def read_bool(name, default):
     return {"true": True, "false": False}.get(value)
 
 
-VERIFY_SSL = read_bool("VERIFY_SSL", "false")
-BACKUP_DIR = pathlib.Path(os.environ.get("LOCAL_BACKUP_DIR", "/backups"))
+VERIFY_SSL = read_bool(var("VERIFY_SSL"), "false")
+BACKUP_DIR = pathlib.Path(os.environ.get("LOCAL_BACKUP_DIR", "/backups")) / NAME
 try:
     RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "30"))
 except ValueError:
@@ -64,8 +92,8 @@ if RETENTION_DAYS is not None and RETENTION_DAYS < 0:
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "").strip()
 WEBHOOK_FORMAT = os.environ.get("WEBHOOK_FORMAT", "text").strip().lower() or "text"
 NOTIFY_ON_SUCCESS = read_bool("NOTIFY_ON_SUCCESS", "false")
-NETWORK_BACKUP = read_bool("NETWORK_BACKUP", "true")
-SYSTEM_BACKUP = read_bool("SYSTEM_BACKUP", "true")
+NETWORK_BACKUP = read_bool(var("NETWORK_BACKUP"), "true")
+SYSTEM_BACKUP = read_bool(var("SYSTEM_BACKUP"), "true")
 
 LOG_LEVELS = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40}
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "").strip().upper() or "INFO"  # rejected in main() if unknown
@@ -80,7 +108,7 @@ def read_fingerprint(value):
     return None
 
 
-CERT_SHA256 = read_fingerprint(os.environ.get("UCG_CERT_SHA256", ""))
+CERT_SHA256 = read_fingerprint(os.environ.get(var("UCG_CERT_SHA256"), ""))
 # Seconds a whole run may take (login to logout). The per-request timeouts
 # only limit one wait each; a console that keeps answering slowly would hold
 # the lock for good and every later run would be skipped.
@@ -160,6 +188,7 @@ def build_payload(ok, message, run):
     return {
         "status": "ok" if ok else "failed",
         "message": message,
+        "console": run["console"],
         "filename": run["filename"],
         "size_bytes": run["size_bytes"],
         "duration_s": round(time.monotonic() - run["started"], 1),
@@ -185,7 +214,10 @@ def notify(ok, message, run):
     else:
         if WEBHOOK_FORMAT != "text":
             log("webhook_format_unknown", "WARNING", format=WEBHOOK_FORMAT, fallback="text")
-        body = {"data": f"UCG backup {'OK' if ok else 'FAILED'}: {message}".encode()}
+        # The console's name only when there are several, so a single
+        # console's text stays as it was.
+        label = f" [{run['console']}]" if MULTI and run["console"] else ""
+        body = {"data": f"UCG backup {'OK' if ok else 'FAILED'}{label}: {message}".encode()}
 
     target = redact_url(WEBHOOK_URL)
     for attempt in range(len(WEBHOOK_RETRY_DELAYS) + 1):
@@ -230,6 +262,7 @@ def effective_settings():
     def shown(value, ok=True):
         return value if ok and value is not None else "invalid"
     return {
+        **({"console": LABEL} if LABEL else {}),
         "host": HOST or None, "site": SITE, "user": USERNAME or None,
         "verify_ssl": VERIFY_SSL if VERIFY_SSL is not None else "invalid",
         "cert_pin": "set" if CERT_SHA256 else shown("off", CERT_SHA256 is not None),
@@ -292,7 +325,7 @@ def check_console_certificate(session):
         return
     if actual and actual != CERT_SHA256:
         raise CertificateMismatch(
-            f"The console's certificate does not match UCG_CERT_SHA256. Expected {colon_hex(CERT_SHA256)}, "
+            f"The console's certificate does not match {var('UCG_CERT_SHA256')}. Expected {colon_hex(CERT_SHA256)}, "
             f"got {colon_hex(actual)}. If the certificate was renewed on purpose, set the new fingerprint."
         )
     # The pin replaces the CA and host name checks, whatever VERIFY_SSL says.
@@ -302,29 +335,31 @@ def check_console_certificate(session):
 
 def main(run):
     log("starting", always=True, version=VERSION, **effective_settings())
+    if CONSOLE is None:
+        raise ConfigError(f"UCG_CONSOLE must be the number of a console (1 or more), got '{CONSOLE_SET}'")
     missing = [
-        name for name, value in (("UCG_HOST", HOST), ("UCG_USERNAME", os.environ.get("UCG_USERNAME")), ("UCG_PASSWORD", os.environ.get("UCG_PASSWORD")))
+        var(name) for name, value in (("UCG_HOST", HOST), ("UCG_USERNAME", os.environ.get(var("UCG_USERNAME"))), ("UCG_PASSWORD", os.environ.get(var("UCG_PASSWORD"))))
         if not value
     ]
     if missing:
         raise ConfigError(f"Missing required setting(s): {', '.join(missing)}")
     bad_bools = [
         name for name, value in (
-            ("VERIFY_SSL", VERIFY_SSL), ("NOTIFY_ON_SUCCESS", NOTIFY_ON_SUCCESS),
-            ("NETWORK_BACKUP", NETWORK_BACKUP), ("SYSTEM_BACKUP", SYSTEM_BACKUP),
+            (var("VERIFY_SSL"), VERIFY_SSL), ("NOTIFY_ON_SUCCESS", NOTIFY_ON_SUCCESS),
+            (var("NETWORK_BACKUP"), NETWORK_BACKUP), (var("SYSTEM_BACKUP"), SYSTEM_BACKUP),
         )
         if value is None
     ]
     if bad_bools:
         raise ConfigError(f"{' and '.join(bad_bools)} must be 'true' or 'false'")
     if not NETWORK_BACKUP and not SYSTEM_BACKUP:
-        raise ConfigError("NETWORK_BACKUP and SYSTEM_BACKUP are both 'false', so there is nothing to back up")
+        raise ConfigError(f"{var('NETWORK_BACKUP')} and {var('SYSTEM_BACKUP')} are both 'false', so there is nothing to back up")
     if LOG_LEVEL not in LOG_LEVELS:
         raise ConfigError(f"LOG_LEVEL must be one of {', '.join(LOG_LEVELS)}, got '{LOG_LEVEL}'")
     if CERT_SHA256 is None:
-        raise ConfigError("UCG_CERT_SHA256 must be a SHA-256 fingerprint: 64 hex digits, with or without colons")
+        raise ConfigError(f"{var('UCG_CERT_SHA256')} must be a SHA-256 fingerprint: 64 hex digits, with or without colons")
     if "/" in HOST:  # also covers a leading https://
-        raise ConfigError("UCG_HOST must be a host name or IP address (optionally with :port), without https:// or a path")
+        raise ConfigError(f"{var('UCG_HOST')} must be a host name or IP address (optionally with :port), without https:// or a path")
     if RETENTION_DAYS is None:
         raise ConfigError(
             f"RETENTION_DAYS must be a whole number of 0 or more, got '{os.environ['RETENTION_DAYS']}'"
@@ -332,7 +367,9 @@ def main(run):
     if RUN_TIMEOUT is None:
         raise ConfigError(f"RUN_TIMEOUT must be a whole number of seconds, 1 or more, got '{os.environ['RUN_TIMEOUT']}'")
     if not SITE_RE.fullmatch(SITE):
-        raise ConfigError("UCG_SITE may only contain letters, digits, '-' and '_' (it is the site's internal name, 'default' unless you changed it)")
+        raise ConfigError(f"{var('UCG_SITE')} may only contain letters, digits, '-' and '_' (it is the site's internal name, 'default' unless you changed it)")
+    if NAME and not SITE_RE.fullmatch(NAME):
+        raise ConfigError(f"{var('UCG_NAME')} may only contain letters, digits, '-' and '_' (it is the name of the console's folder)")
 
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     start_deadline(RUN_TIMEOUT)
@@ -377,7 +414,7 @@ def login(session):
     )
     if resp.status_code == 401:
         raise RuntimeError(
-            "Login rejected (401). Check UCG_USERNAME/UCG_PASSWORD, and make sure "
+            f"Login rejected (401). Check {var('UCG_USERNAME')}/{var('UCG_PASSWORD')}, and make sure "
             "the account is a *local* admin without 2FA enabled."
         )
     resp.raise_for_status()
@@ -413,7 +450,7 @@ def backup_download_path(resp):
     if not isinstance(url, str) or not url:
         raise RuntimeError(
             f"Unexpected backup response (HTTP {resp.status_code}, {len(resp.content or b'')} bytes), "
-            "no download URL -- check that UCG_SITE is the right site name."
+            f"no download URL -- check that {var('UCG_SITE')} is the right site name."
         )
     # The path is joined onto the console's own address. One with a scheme or
     # host would send the session cookie elsewhere.
@@ -437,7 +474,7 @@ def save_backup(session, run):
     if resp.status_code == 403:
         raise RuntimeError(
             "Backup command rejected (403), also after logging in again. Most likely "
-            "cause: UCG_USERNAME does not have full Administrator / Full Management "
+            f"cause: {var('UCG_USERNAME')} does not have full Administrator / Full Management "
             "rights on the Network application (e.g. it's a Limited Admin or View Only "
             "role) -- grant it full management access and try again."
         )
@@ -445,8 +482,8 @@ def save_backup(session, run):
         # What UniFi OS answers for an application it doesn't run.
         raise RuntimeError(
             "Backup command not found (404): the console may not run the Network application (a UniFi "
-            "NVR with Protect, for example), or UCG_SITE is not a site on it. On a console without the "
-            "Network application, set NETWORK_BACKUP=false to save the system backup only."
+            f"NVR with Protect, for example), or {var('UCG_SITE')} is not a site on it. On a console without the "
+            f"Network application, set {var('NETWORK_BACKUP')}=false to save the system backup only."
         )
     resp.raise_for_status()
     refresh_csrf(session, resp)
@@ -484,9 +521,9 @@ def save_system_backup(session, run):
         if dl.status_code == 404:
             reason = "this console does not offer it, its UniFi OS may be too old"
         else:
-            reason = "UCG_USERNAME may not be allowed to download it, it needs full rights on the console itself"
+            reason = f"{var('UCG_USERNAME')} may not be allowed to download it, it needs full rights on the console itself"
         hint = (
-            "The Network backup of this run is saved. Set SYSTEM_BACKUP=false to back up the Network application only."
+            f"The Network backup of this run is saved. Set {var('SYSTEM_BACKUP')}=false to back up the Network application only."
             if run["filename"] else "Nothing was saved in this run."
         )
         raise RuntimeError(f"System backup download rejected ({dl.status_code}): {reason}. {hint}")
@@ -593,6 +630,10 @@ def files_to_expire(pattern):
             st = f.stat()
         except FileNotFoundError:
             continue
+        # Files only: with several consoles, /backups also holds the other
+        # consoles' folders, and one named like "ucg-system-backup-x" matches.
+        if not stat.S_ISREG(st.st_mode):
+            continue
         entries.append((st.st_mtime, st.st_size >= MIN_BACKUP_BYTES, f))
     entries.sort(key=lambda e: e[0], reverse=True)
     protected = set(list(f for _, good, f in entries if good)[:KEEP_NEWEST])
@@ -617,8 +658,8 @@ def apply_retention(run):
         sizes = [size for size in sizes if size is not None]
         if sizes:
             log("retention_done", removed=len(sizes), older_than_days=RETENTION_DAYS, freed_bytes=sum(sizes))
-    run["backups_kept"] = sum(1 for _ in BACKUP_DIR.glob("ucg-backup-*.unf"))
-    run["system_backups_kept"] = sum(1 for _ in BACKUP_DIR.glob("ucg-system-backup-*"))
+    run["backups_kept"] = sum(1 for f in BACKUP_DIR.glob("ucg-backup-*.unf") if os.path.isfile(f))
+    run["system_backups_kept"] = sum(1 for f in BACKUP_DIR.glob("ucg-system-backup-*") if os.path.isfile(f))
 
 
 def success_message(run):
@@ -630,7 +671,7 @@ def success_message(run):
 
 def new_run():
     return {
-        "started": time.monotonic(), "filename": None, "size_bytes": None, "backups_kept": None,
+        "started": time.monotonic(), "console": LABEL, "filename": None, "size_bytes": None, "backups_kept": None,
         "system_filename": None, "system_size_bytes": None, "system_backups_kept": None,
     }
 
@@ -648,6 +689,7 @@ if __name__ == "__main__":
             f"{count} backup runs in a row were skipped because an earlier run is still going. "
             "It may be stuck; it ends itself after RUN_TIMEOUT. If this repeats, restart the container."
         )
+        run["console"] = None  # one alarm for the whole run, whichever console hangs
         log("runs_skipped", "ERROR", skipped=count, error=message)
         notify(False, message, run)
         sys.exit(1)
