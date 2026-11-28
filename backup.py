@@ -41,6 +41,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # number; unset, there is only one console. Console 1 reads the settings
 # without a suffix, console N (2 or more) the same names ending in _N.
 CONSOLE_SET = os.environ.get("UCG_CONSOLE", "").strip()
+MULTI = bool(CONSOLE_SET)
 if not CONSOLE_SET:
     CONSOLE = 1
 elif re.fullmatch(r"[1-9][0-9]{0,3}", CONSOLE_SET):
@@ -68,7 +69,7 @@ SITE_RE = re.compile(r"[A-Za-z0-9_-]+")
 NAME = os.environ.get(var("UCG_NAME"), "").strip() or (f"console-{CONSOLE}" if SUFFIX else "")
 # How webhooks and the log name the console: not at all for a single console
 # without a name, so its messages stay as they were before several consoles.
-LABEL = (NAME or f"console-{CONSOLE_SET}") if CONSOLE_SET or NAME else None
+LABEL = (NAME or f"console-{CONSOLE_SET}") if MULTI or NAME else None
 
 
 def read_bool(name, default):
@@ -214,7 +215,7 @@ def notify(ok, message, run):
             log("webhook_format_unknown", "WARNING", format=WEBHOOK_FORMAT, fallback="text")
         # The console's name only when there are several, so a single
         # console's text stays as it was.
-        label = f" [{run['console']}]" if CONSOLE_SET and run["console"] else ""
+        label = f" [{run['console']}]" if MULTI and run["console"] else ""
         body = {"data": f"UCG backup {'OK' if ok else 'FAILED'}{label}: {message}".encode()}
 
     target = redact_url(WEBHOOK_URL)

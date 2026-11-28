@@ -8,6 +8,8 @@
 
 # The settings each console has for itself. Everything else is shared.
 UCG_CONSOLE_SETTINGS=(UCG_HOST UCG_USERNAME UCG_PASSWORD UCG_SITE UCG_NAME NETWORK_BACKUP SYSTEM_BACKUP VERIFY_SSL UCG_CERT_SHA256)
+# A console number, as backup.py accepts it in UCG_CONSOLE.
+UCG_CONSOLE_RE='[1-9][0-9]{0,3}'
 
 # Value of a variable without surrounding blanks; empty means "not set".
 ucg_trimmed() {
@@ -22,26 +24,36 @@ ucg_suffix() {
     if [[ $1 == 1 ]]; then printf ''; else printf '_%s' "$1"; fi
 }
 
-# The name of console N in the log and in webhooks: UCG_NAME(_N), else console-N.
-ucg_console_label() {
+# The folder of console N below /backups: UCG_NAME(_N), else console-N;
+# empty (/backups itself) for console 1 without a name. backup.py has the
+# same rule.
+ucg_folder() {
     local name
     name=$(ucg_trimmed "UCG_NAME$(ucg_suffix "$1")")
-    printf '%s' "${name:-console-$1}"
+    if [[ -z ${name} && $1 != 1 ]]; then name=console-$1; fi
+    printf '%s' "${name}"
+}
+
+# The name of console N in the log: its folder, console-1 for /backups.
+ucg_console_label() {
+    local folder
+    folder=$(ucg_folder "$1")
+    printf '%s' "${folder:-console-$1}"
 }
 
 # The numbers of the configured consoles, in order, one per line: 1, then
-# every N from 2 to 9999 whose UCG_HOST_N is set.
+# every N from 2 to 9999 whose UCG_HOST_N is set. (UCG_HOST_1 is refused by
+# ucg_check_suffixes.)
 ucg_consoles() {
     local name
     {
         echo 1
         for name in $(compgen -e); do
-            if [[ ${name} =~ ^UCG_HOST_([1-9][0-9]{0,3})$ ]] && [[ ${BASH_REMATCH[1]} != 1 ]] \
-                && [[ -n $(ucg_trimmed "${name}") ]]; then
+            if [[ ${name} =~ ^UCG_HOST_(${UCG_CONSOLE_RE})$ ]] && [[ -n $(ucg_trimmed "${name}") ]]; then
                 echo "${BASH_REMATCH[1]}"
             fi
         done
-    } | sort -n
+    } | sort -nu
 }
 
 # Prints an ERROR line for every suffixed setting that belongs to no
@@ -54,7 +66,7 @@ ucg_check_suffixes() {
         [[ ${name} =~ ^(${settings})_([0-9]+)$ ]] || continue
         [[ -n $(ucg_trimmed "${name}") ]] || continue
         base=${BASH_REMATCH[1]} n=${BASH_REMATCH[2]}
-        if [[ ! ${n} =~ ^[1-9][0-9]{0,3}$ ]] || [[ ${n} == 1 ]]; then
+        if [[ ! ${n} =~ ^${UCG_CONSOLE_RE}$ ]] || [[ ${n} == 1 ]]; then
             echo "ERROR: ${name} is not a setting: console 1 uses ${base} without a suffix, the others end in _2 to _9999" >&2
             ok=1
         elif [[ -z $(ucg_trimmed "UCG_HOST_${n}") ]]; then

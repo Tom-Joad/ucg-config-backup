@@ -1085,7 +1085,7 @@ def test_console_2_runs_into_its_own_folder_and_names_itself_in_the_webhook(sett
     sent = {}
     folder = settings / "nvr"
     monkeypatch.setattr(backup, "BACKUP_DIR", folder)
-    monkeypatch.setattr(backup, "CONSOLE_SET", "2")
+    monkeypatch.setattr(backup, "MULTI", True)
     monkeypatch.setattr(backup, "LABEL", "nvr")
     monkeypatch.setattr(backup, "WEBHOOK_URL", "https://hook.example/secret")
     monkeypatch.setattr(requests, "Session", lambda: FakeSession())
