@@ -5,6 +5,13 @@ All notable changes to this project are listed here. Versions follow
 upgrading (a renamed or removed setting, a different folder layout, a changed
 webhook payload) only comes with a new major version.
 
+## [2.5.1] - 2026-11-28
+
+### Changed
+- Updated dependencies:
+  - charset-normalizer from 3.5.2 to 3.5.3
+  - certifi from 2026.10.23 to 2026.11.20
+
 ## [2.5.0] - 2026-11-26
 
 ### Added
@@ -344,6 +351,7 @@ webhook payload) only comes with a new major version.
 Initial release: local-API backup flow, cron scheduling, retention, webhook
 notifications, multi-arch image, Unraid and Synology documentation.
 
+[2.5.1]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.5.0...v2.5.1
 [2.5.0]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.4.3...v2.5.0
 [2.4.3]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.4.2...v2.4.3
 [2.4.2]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.4.1...v2.4.2
