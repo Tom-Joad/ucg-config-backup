@@ -92,10 +92,12 @@ expect_stop "a second console without a password" 'ERROR: UCG_PASSWORD_2 is requ
     -e UCG_HOST_2=y -e UCG_USERNAME_2=x
 expect_stop "VERIFY_SSL_2=yes" "ERROR: VERIFY_SSL_2 must be 'true' or 'false'" "${CONSOLE2[@]}" -e VERIFY_SSL_2=yes
 expect_stop "a console name with a slash" 'ERROR: UCG_NAME_2 may only contain' "${CONSOLE2[@]}" -e UCG_NAME_2=a/b
-expect_stop "two consoles with the same name" "both use the folder name 'nvr'" \
+expect_stop "two consoles with the same name" "both use the name 'nvr'" \
     "${CONSOLE2[@]}" -e UCG_NAME=NVR -e UCG_NAME_2=nvr
-expect_stop "a name that is another console's default" "both use the folder name 'console-2'" \
+expect_stop "a name that is another console's default" "both use the name 'console-2'" \
     "${CONSOLE2[@]}" -e UCG_NAME=console-2
+expect_stop "a name that is the first console's label" "both use the name 'Console-1'" \
+    "${CONSOLE2[@]}" -e UCG_NAME_2=Console-1
 
 echo "== without any volume the schedule is installed"
 docker run -d --name "$NAME" -e UCG_HOST=x -e UCG_USERNAME=x -e UCG_PASSWORD=x \

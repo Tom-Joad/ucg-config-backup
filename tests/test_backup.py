@@ -1126,3 +1126,14 @@ def test_a_named_single_console_shows_its_name_in_json_but_not_in_text(settings,
     assert sent["data"] == b"UCG backup FAILED: boom"
     assert backup.build_payload(False, "boom", run)["console"] == "gateway"
 
+
+
+def test_retention_leaves_another_consoles_folder_alone(settings):
+    old = time.time() - 90 * 86400
+    folder = settings / "ucg-system-backup-nvr"  # UCG_NAME_2 of another console
+    folder.mkdir()
+    (folder / "ucg-system-backup-20260101-000000.unifi").write_bytes(SYSTEM_DATA)
+    os.utime(folder, (old, old))
+    run = new_run()
+    backup.apply_retention(run)
+    assert folder.is_dir() and run["retention_warnings"] == 0 and run["system_backups_kept"] == 0

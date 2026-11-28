@@ -47,7 +47,7 @@ done
 # The settings each console has for itself, with its suffix (none for
 # console 1).
 host_re='^([A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?|\[[0-9A-Fa-f:.]+\])(:([0-9]{1,5}))?$'
-declare -A folder_of=()
+declare -A label_of=()
 for n in "${consoles[@]}"; do
     sfx=$(ucg_suffix "${n}")
     for name in VERIFY_SSL NETWORK_BACKUP SYSTEM_BACKUP; do
@@ -85,22 +85,20 @@ for n in "${consoles[@]}"; do
     fi
 
     # The name is the console's folder below /backups (console 1 without a
-    # name writes to /backups itself). Two consoles in one folder would
-    # expire each other's backups; case-insensitive file systems (SMB,
-    # macOS) would merge "NVR" and "nvr".
+    # name writes to /backups itself) and names it in the log and webhooks.
+    # Two consoles in one folder would expire each other's backups;
+    # case-insensitive file systems (SMB, macOS) would merge "NVR" and "nvr".
     value=$(ucg_trimmed "UCG_NAME${sfx}")
     if [[ -n ${value} && ! ${value} =~ ^[A-Za-z0-9_-]+$ ]]; then
         echo "ERROR: UCG_NAME${sfx} may only contain letters, digits, '-' and '_', got '${value}'" >&2
         failed=1
     fi
-    folder=$(ucg_folder "${n}")
-    if [[ -n ${folder} ]]; then
-        if [[ -n ${folder_of[${folder,,}]:-} ]]; then
-            echo "ERROR: console ${folder_of[${folder,,}]} and console ${n} both use the folder name '${folder}' (UCG_NAME, or console-N without one): give each its own UCG_NAME${sfx}" >&2
-            failed=1
-        else
-            folder_of[${folder,,}]=${n}
-        fi
+    label=$(ucg_console_label "${n}")
+    if [[ -n ${label_of[${label,,}]:-} ]]; then
+        echo "ERROR: console ${label_of[${label,,}]} and console ${n} both use the name '${label}' (UCG_NAME, or console-N without one): give each its own UCG_NAME${sfx}" >&2
+        failed=1
+    else
+        label_of[${label,,}]=${n}
     fi
 done
 

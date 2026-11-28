@@ -299,13 +299,16 @@ with a number at the end:
   console can't be left out unnoticed.
 * **Folders:** console N writes to `/backups/<UCG_NAME_N>`, by default
   `/backups/console-N`. Console 1 keeps writing to `/backups` itself, as
-  with a single console, unless `UCG_NAME` is set. Every console needs its
-  own folder: two consoles with the same name (in any case) stop the
-  container. Retention works per folder.
+  with a single console, unless `UCG_NAME` is set; the log and webhooks
+  call it `console-1` then. Every console needs a name of its own: two
+  consoles with the same name (in any case) stop the container. Retention
+  works per folder.
 * The consoles are backed up one after the other, each in a run of its own:
   a console that fails or hangs doesn't keep the others from being backed
   up. Each one has its own `starting` line (with a `console` field), its
-  own webhook and its own `RUN_TIMEOUT`. A `run_summary` line at the end
+  own webhook and its own `RUN_TIMEOUT`, so a whole run can take up to
+  that many times `RUN_TIMEOUT`: leave room for it in `CRON_SCHEDULE`, or
+  scheduled runs are skipped while the previous one still goes. A `run_summary` line at the end
   counts the failed ones; a manual run (`docker exec ucg-config-backup
   ucg-backup`) then exits with `1` if any console failed.
 * Webhooks name the console: the JSON body has a `console` field, the text

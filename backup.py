@@ -18,6 +18,7 @@ import pathlib
 import re
 import signal
 import socket
+import stat
 import ssl
 import sys
 import time
@@ -629,6 +630,10 @@ def files_to_expire(pattern):
             st = f.stat()
         except FileNotFoundError:
             continue
+        # Files only: with several consoles, /backups also holds the other
+        # consoles' folders, and one named like "ucg-system-backup-x" matches.
+        if not stat.S_ISREG(st.st_mode):
+            continue
         entries.append((st.st_mtime, st.st_size >= MIN_BACKUP_BYTES, f))
     entries.sort(key=lambda e: e[0], reverse=True)
     protected = set(list(f for _, good, f in entries if good)[:KEEP_NEWEST])
@@ -653,8 +658,8 @@ def apply_retention(run):
         sizes = [size for size in sizes if size is not None]
         if sizes:
             log("retention_done", removed=len(sizes), older_than_days=RETENTION_DAYS, freed_bytes=sum(sizes))
-    run["backups_kept"] = sum(1 for _ in BACKUP_DIR.glob("ucg-backup-*.unf"))
-    run["system_backups_kept"] = sum(1 for _ in BACKUP_DIR.glob("ucg-system-backup-*"))
+    run["backups_kept"] = sum(1 for f in BACKUP_DIR.glob("ucg-backup-*.unf") if os.path.isfile(f))
+    run["system_backups_kept"] = sum(1 for f in BACKUP_DIR.glob("ucg-system-backup-*") if os.path.isfile(f))
 
 
 def success_message(run):

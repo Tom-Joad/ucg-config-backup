@@ -74,8 +74,11 @@ run=(timeout -s KILL "$((limit + 120))" "${run[@]}")
 # shellcheck source=/dev/null
 source /usr/local/lib/ucg-config-backup/consoles.sh
 mapfile -t consoles < <(ucg_consoles)
-# A single console runs as it always did; UCG_CONSOLE stays unset.
-if (( ${#consoles[@]} == 1 )); then
+# A single console runs as it always did, without UCG_CONSOLE. So does a
+# call with arguments (--version, --skipped): it is about the whole run,
+# not about one console.
+if (( ${#consoles[@]} == 1 || $# > 0 )); then
+    unset UCG_CONSOLE
     exec "${run[@]}" "$@"
 fi
 
@@ -83,7 +86,7 @@ fi
 # hangs doesn't stop the others, and each one reports for itself.
 failed=()
 for n in "${consoles[@]}"; do
-    UCG_CONSOLE=${n} "${run[@]}" "$@" || failed+=("$(ucg_console_label "${n}")")
+    UCG_CONSOLE=${n} "${run[@]}" || failed+=("$(ucg_console_label "${n}")")
 done
 if (( ${#failed[@]} )); then
     log ERROR run_summary "consoles=${#consoles[@]}" "failed=${#failed[@]}" "failed_consoles=${failed[*]}"
