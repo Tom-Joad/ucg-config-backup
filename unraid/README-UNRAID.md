@@ -37,6 +37,24 @@ All under **Show more settings**:
 | `SYSTEM_BACKUP` | `false` saves only the Network backup, without the console's system backup |
 | `WEBHOOK_URL`, `WEBHOOK_FORMAT`, `NOTIFY_ON_SUCCESS` | Notifications, e.g. to Home Assistant (`json`) or ntfy.sh (`text`) |
 
+## A second console (or more)
+
+The template has the fields for a second console under **Show more
+settings**: `UCG_HOST_2`, `UCG_USERNAME_2`, `UCG_PASSWORD_2`, `UCG_NAME_2`
+and `NETWORK_BACKUP_2`. Leave them empty for one console. With
+`UCG_HOST_2` set, the container also backs up that console, into the
+folder `UCG_NAME_2` (default `console-2`) inside the **Backup Directory**.
+Set `NETWORK_BACKUP_2` to `false` if it is a UniFi NVR. See
+[Several consoles](../README.md#several-consoles) in the main README for
+what each console has for itself and what is shared.
+
+For a third console, or a setting of the second one that has no field
+(`UCG_SITE_2`, `SYSTEM_BACKUP_2`, `VERIFY_SSL_2`, `UCG_CERT_SHA256_2`),
+**Edit** the container → **Add another Path, Port, Variable, Label or
+Device** → **Config Type** `Variable`, with the name as **Key**, e.g.
+`UCG_HOST_3`, `UCG_USERNAME_3`, `UCG_PASSWORD_3`. Containers installed
+before 2.6.0 add the second console's fields the same way.
+
 ## Updating
 
 **Docker** tab → **Check for Updates** → **apply update**. Unraid doesn't

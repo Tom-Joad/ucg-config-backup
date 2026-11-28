@@ -56,6 +56,7 @@ jobs:
       - name: Shellcheck
         run: |
           shellcheck root/usr/local/bin/ucg-backup \
+            root/usr/local/lib/ucg-config-backup/consoles.sh \
             root/etc/s6-overlay/s6-rc.d/*/run tests/smoke.sh
 
       - name: Unraid template

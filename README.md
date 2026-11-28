@@ -20,6 +20,8 @@ a mounted volume:
 On a console without the Network application, such as a UniFi NVR running
 Protect, set `NETWORK_BACKUP=false` and only the system backup is saved, see
 [Consoles without the Network application](#consoles-without-the-network-application-unifi-nvr).
+One container can back up several consoles, for example a gateway and an
+NVR, see [Several consoles](#several-consoles).
 
 Built on linuxserver.io's Alpine base image, with the usual `PUID`, `PGID`,
 `UMASK` and `TZ` settings.
@@ -38,6 +40,7 @@ Built on linuxserver.io's Alpine base image, with the usual `PUID`, `PGID`,
   * [Synology (Container Manager / Docker)](#synology-container-manager--docker)
 * [Parameters](#parameters)
 * [Environment variables](#environment-variables)
+* [Several consoles](#several-consoles)
 * [Webhook notifications](#webhook-notifications)
   * [Home Assistant](#home-assistant)
 * [Volumes / paths](#volumes--paths)
@@ -248,6 +251,7 @@ with it set.
 | `UCG_HOST` | yes | – | IP address or host name of the UCG Ultra, optionally with `:port`; no `https://` and no path |
 | `UCG_USERNAME` | yes | – | Local admin username (see [Prerequisites](#prerequisites-on-the-ucg-ultra)) |
 | `UCG_PASSWORD` | yes | – | Password for that account |
+| `UCG_NAME` | | – | Name of the console: its backups go to a folder of that name below `/backups` (letters, digits, `-` and `_`). Without it, they go to `/backups` itself. Mostly for [several consoles](#several-consoles) |
 | `UCG_SITE` | | `default` | UniFi site name (letters, digits, `-` and `_` only; anything else stops the container) |
 | `NETWORK_BACKUP` | | `true` | `true` or `false`: save the Network application's backup (`.unf`). Set `false` on a console without the Network application, e.g. a [UniFi NVR](#consoles-without-the-network-application-unifi-nvr) |
 | `SYSTEM_BACKUP` | | `true` | `true` or `false`: also save the console's system backup (all applications and settings) next to the Network backup. `NETWORK_BACKUP` and `SYSTEM_BACKUP` can't both be `false` |
@@ -262,9 +266,59 @@ with it set.
 | `NOTIFY_ON_SUCCESS` | | `false` | `true` or `false`: also send a webhook on success, not just on failure |
 | `WEBHOOK_URL` | | – | URL to POST run notifications to (e.g. ntfy.sh, Healthchecks.io, Home Assistant) — must start with `http://` or `https://`; treat it as a secret, see [Webhook notifications](#webhook-notifications) |
 | `WEBHOOK_FORMAT` | | `text` | `text` for a plain-text body, `json` for structured fields (Home Assistant); anything else stops the container |
+| `UCG_HOST_2`, `UCG_USERNAME_2`, `UCG_PASSWORD_2`, ... | | – | A second console (`_3` a third one, and so on), with its own `UCG_NAME_2`, `UCG_SITE_2`, `NETWORK_BACKUP_2`, `SYSTEM_BACKUP_2`, `VERIFY_SSL_2` and `UCG_CERT_SHA256_2`. See [Several consoles](#several-consoles) |
 | `PUID` / `PGID` | | `911` | User and group ID of the backup files, see [Parameters](#parameters) |
 | `UMASK` | | `022` | Umask of the backup files |
 | `TZ` | | `UTC` | Timezone for the schedule and log timestamps |
+
+## Several consoles
+
+One container can back up more than one console. Console 1 uses the
+settings above; every further console has the same per-console settings
+with a number at the end:
+
+```bash
+  -e UCG_HOST_2=<NVR-IP> \
+  -e UCG_USERNAME_2=backup-bot \
+  -e UCG_PASSWORD_2=change-me \
+  -e UCG_NAME_2=nvr \
+  -e NETWORK_BACKUP_2=false \
+```
+
+* **Per console:** `UCG_HOST`, `UCG_USERNAME`, `UCG_PASSWORD`, `UCG_NAME`,
+  `UCG_SITE`, `NETWORK_BACKUP`, `SYSTEM_BACKUP`, `VERIFY_SSL` and
+  `UCG_CERT_SHA256`, ending in `_2`, `_3`, ... for the second, third, ...
+  console. Nothing is taken over from console 1: a setting that differs
+  from its default has to be set for each console that needs it.
+* **Shared:** `CRON_SCHEDULE`, `RETENTION_DAYS`, `RUN_TIMEOUT` (it applies
+  to each console on its own), `RUN_ON_START`, `LOG_LEVEL`, `WEBHOOK_URL`,
+  `WEBHOOK_FORMAT` and `NOTIFY_ON_SUCCESS`.
+* A console exists when its `UCG_HOST_N` is set. The numbers may have gaps
+  (`_2` and `_5` is fine). A setting ending in `_N` without `UCG_HOST_N`,
+  or one ending in `_1`, stops the container with an `ERROR:` line, so a
+  console can't be left out unnoticed.
+* **Folders:** console N writes to `/backups/<UCG_NAME_N>`, by default
+  `/backups/console-N`. Console 1 keeps writing to `/backups` itself, as
+  with a single console, unless `UCG_NAME` is set; the log and webhooks
+  call it `console-1` then. Every console needs a name of its own: two
+  consoles with the same name (in any case) stop the container. Retention
+  works per folder.
+* The consoles are backed up one after the other, each in a run of its own:
+  a console that fails or hangs doesn't keep the others from being backed
+  up. Each one has its own `starting` line (with a `console` field), its
+  own webhook and its own `RUN_TIMEOUT`, so a whole run can take up to
+  that many times `RUN_TIMEOUT`: leave room for it in `CRON_SCHEDULE`, or
+  scheduled runs are skipped while the previous one still goes. A `run_summary` line at the end
+  counts the failed ones; a manual run (`docker exec ucg-config-backup
+  ucg-backup`) then exits with `1` if any console failed.
+* Webhooks name the console: the JSON body has a `console` field, the text
+  body reads `UCG backup FAILED [nvr]: ...`.
+
+**Giving console 1 a name later:** with `UCG_NAME` set, console 1's new
+backups go to `/backups/<UCG_NAME>`. The files it wrote to `/backups`
+before stay where they are and are no longer deleted by `RETENTION_DAYS`.
+Move them into the new folder by hand, or delete them when you no longer
+need them.
 
 ## Webhook notifications
 
@@ -283,6 +337,7 @@ and after a successful one too with `NOTIFY_ON_SUCCESS=true`.
 {
   "status": "ok",
   "message": "ucg-backup-20261020-030014.unf, ucg-system-backup-20261020-030015.unifi",
+  "console": null,
   "filename": "ucg-backup-20261020-030014.unf",
   "size_bytes": 2410496,
   "duration_s": 12.4,
@@ -302,15 +357,16 @@ and after a successful one too with `NOTIFY_ON_SUCCESS=true`.
 | --- | --- |
 | `status` | Always `ok` or `failed` (lowercase) — the value to trigger on |
 | `message` | Human-readable part: the filenames on success, the error on failure |
+| `console` | The console's name with [several consoles](#several-consoles): `UCG_NAME(_N)`, else `console-N`. `null` for a single console without `UCG_NAME` |
 | `filename` | Name of the saved Network backup (`.unf`); `null` with `NETWORK_BACKUP=false` |
 | `size_bytes` | Size of that file — use it to catch empty or suspiciously small backups that still report `ok`; `null` with `NETWORK_BACKUP=false`, watch `system_size_bytes` then |
 | `duration_s` | Run duration in seconds |
-| `host`, `site` | `UCG_HOST` and `UCG_SITE` of the run |
+| `host`, `site` | `UCG_HOST` and `UCG_SITE` of the run (`UCG_HOST_N` and `UCG_SITE_N` for console N) |
 | `retention_days` | Effective `RETENTION_DAYS` |
-| `backups_kept` | Number of `ucg-backup-*.unf` files in `/backups` after retention |
+| `backups_kept` | Number of `ucg-backup-*.unf` files in the console's folder after retention |
 | `system_filename` | Name of the saved system backup (`.unifi`); `null` with `SYSTEM_BACKUP=false` |
 | `system_size_bytes` | Size of that file |
-| `system_backups_kept` | Number of `ucg-system-backup-*` files in `/backups` after retention |
+| `system_backups_kept` | Number of `ucg-system-backup-*` files in the console's folder after retention |
 | `timestamp` | ISO 8601 with the offset of `TZ` |
 | `version` | Container version |
 
@@ -356,6 +412,19 @@ trigger the automation.
 | Path | Contents |
 | --- | --- |
 | `/backups` | Downloaded backup files, named `ucg-backup-<timestamp>.unf` (Network application) and `ucg-system-backup-<timestamp>.unifi` (whole console), owned by `PUID:PGID` |
+
+With [several consoles](#several-consoles) (or `UCG_NAME` set), each named
+console has a folder of its own:
+
+```
+/backups/
+  ucg-backup-<timestamp>.unf             console 1 without UCG_NAME
+  ucg-system-backup-<timestamp>.unifi
+  nvr/                                   console 2 with UCG_NAME_2=nvr
+    ucg-system-backup-<timestamp>.unifi
+  console-3/                             console 3 without UCG_NAME_3
+    ...
+```
 
 `/backups` is the only volume; the container keeps no other state. Its
 crontab is rebuilt from `CRON_SCHEDULE` at every start. If the host folder
@@ -492,7 +561,11 @@ one JSON object per line, as in the other containers of this family:
 event. The first line of every run is `starting` with the version and the
 settings in use (never the password; the webhook URL only as `set` or
 `off`). Failures are `level` `ERROR` with the reason in `error`: `run_failed`
-for a failed run, `config_invalid` for a wrong setting. `LOG_LEVEL` filters.
+for a failed run, `config_invalid` for a wrong setting. With
+[several consoles](#several-consoles), each console's run starts with its
+own `starting` line, which names it in `console`, and a `run_summary` line
+ends the whole run (`consoles`, `failed`, and `failed_consoles` when one
+failed). `LOG_LEVEL` filters.
 The container's start-up (settings check, schedule, the base image's
 banner) is plain text before the first run.
 

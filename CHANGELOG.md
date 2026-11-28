@@ -5,7 +5,31 @@ All notable changes to this project are listed here. Versions follow
 upgrading (a renamed or removed setting, a different folder layout, a changed
 webhook payload) only comes with a new major version.
 
-## [2.5.1] - 2026-11-28
+## [2.6.0] - 2026-11-28
+
+### Added
+- One container can back up several consoles, for example a gateway and a
+  UniFi NVR. A second console is set with `UCG_HOST_2`, `UCG_USERNAME_2`,
+  `UCG_PASSWORD_2` and, if needed, `UCG_NAME_2`, `UCG_SITE_2`,
+  `NETWORK_BACKUP_2`, `SYSTEM_BACKUP_2`, `VERIFY_SSL_2` and
+  `UCG_CERT_SHA256_2`; a third one with `_3`, and so on. Nothing is taken
+  over from the first console. The schedule, retention, run timeout, log
+  level and webhook settings are shared. The consoles are backed up one
+  after the other, each with its own log lines, webhook and `RUN_TIMEOUT`,
+  so one that fails doesn't stop the others. See "Several consoles" in the
+  README.
+- `UCG_NAME`: the console's name. Console N's backups go to
+  `/backups/<UCG_NAME_N>` (default `console-N`). The first console keeps
+  writing to `/backups` itself unless `UCG_NAME` is set; its older files in
+  `/backups` are then no longer removed by `RETENTION_DAYS`.
+- The webhook's JSON body has a new `console` field, `null` for a single
+  console without `UCG_NAME`. With several consoles the text body names
+  the console (`UCG backup FAILED [nvr]: ...`). With one console the log
+  and the text body are unchanged.
+- The Unraid template has fields for a second console (`UCG_HOST_2`,
+  `UCG_USERNAME_2`, `UCG_PASSWORD_2`, `UCG_NAME_2`, `NETWORK_BACKUP_2`),
+  empty by default. Existing containers add them with **Add another Path,
+  Port, Variable, Label or Device** if needed.
 
 ### Changed
 - Updated dependencies:
@@ -351,7 +375,7 @@ webhook payload) only comes with a new major version.
 Initial release: local-API backup flow, cron scheduling, retention, webhook
 notifications, multi-arch image, Unraid and Synology documentation.
 
-[2.5.1]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.5.0...v2.5.1
+[2.6.0]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.5.0...v2.6.0
 [2.5.0]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.4.3...v2.5.0
 [2.4.3]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.4.2...v2.4.3
 [2.4.2]: https://github.com/Tom-Joad/ucg-config-backup/compare/v2.4.1...v2.4.2
