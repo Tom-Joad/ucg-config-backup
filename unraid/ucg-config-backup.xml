@@ -38,4 +38,9 @@
   <Config Name="NOTIFY_ON_SUCCESS" Target="NOTIFY_ON_SUCCESS" Default="false" Mode="" Description="Also notify the webhook on success, not only on failure" Type="Variable" Display="advanced" Required="false" Mask="false"/>
   <Config Name="WEBHOOK_URL" Target="WEBHOOK_URL" Default="" Mode="" Description="Optional: URL for POST notifications (ntfy.sh, Healthchecks.io, Home Assistant webhook). Usually contains a secret" Type="Variable" Display="advanced" Required="false" Mask="true"/>
   <Config Name="WEBHOOK_FORMAT" Target="WEBHOOK_FORMAT" Default="text" Mode="" Description="text (plain text, ntfy.sh/Healthchecks.io) or json (structured fields, Home Assistant)" Type="Variable" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="UCG_HOST_2" Target="UCG_HOST_2" Default="" Mode="" Description="Optional second console: its IP address or host name. Leave empty for one console. More consoles: see README-UNRAID" Type="Variable" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="UCG_USERNAME_2" Target="UCG_USERNAME_2" Default="" Mode="" Description="Second console: local admin user (required when UCG_HOST_2 is set)" Type="Variable" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="UCG_PASSWORD_2" Target="UCG_PASSWORD_2" Default="" Mode="" Description="Second console: password of that user (required when UCG_HOST_2 is set)" Type="Variable" Display="advanced" Required="false" Mask="true"/>
+  <Config Name="UCG_NAME_2" Target="UCG_NAME_2" Default="" Mode="" Description="Second console: folder below the Backup Directory (letters, digits, - and _). Empty: console-2" Type="Variable" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="NETWORK_BACKUP_2" Target="NETWORK_BACKUP_2" Default="" Mode="" Description="Second console: false on a console without the Network application, e.g. a UniFi NVR. Empty: true" Type="Variable" Display="advanced" Required="false" Mask="false"/>
 </Container>

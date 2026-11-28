@@ -111,7 +111,7 @@ def test_payload_always_has_every_key():
     assert payload["status"] == "failed"
     assert payload["filename"] is None
     assert set(payload) == {
-        "status", "message", "filename", "size_bytes", "duration_s", "host", "site",
+        "status", "message", "console", "filename", "size_bytes", "duration_s", "host", "site",
         "retention_days", "backups_kept", "system_filename", "system_size_bytes", "system_backups_kept",
         "timestamp", "version",
     }
@@ -786,13 +786,15 @@ def test_skipped_runs_send_a_failed_webhook(tmp_path):
     try:
         out = subprocess.run(
             [sys.executable, backup.__file__, "--skipped", "3"], capture_output=True, text=True,
-            env={**os.environ, "WEBHOOK_URL": f"http://127.0.0.1:{server.server_port}/secret-id", "WEBHOOK_FORMAT": "json"},
+            env={**os.environ, "WEBHOOK_URL": f"http://127.0.0.1:{server.server_port}/secret-id", "WEBHOOK_FORMAT": "json",
+                 "UCG_NAME": "gateway"},  # one alarm for all consoles: it names none
         )
     finally:
         server.shutdown()
     assert out.returncode == 1
     assert b'"status": "failed"' in received[0] or b'"status":"failed"' in received[0]
     assert b"3 backup runs in a row were skipped" in received[0]
+    assert json.loads(received[0])["console"] is None
     assert "secret-id" not in out.stdout + out.stderr
 
 
@@ -997,3 +999,130 @@ def test_a_pin_mismatch_is_logged_as_certificate_mismatch(tls_console):
     })
     events = [json.loads(line) for line in out.stdout.splitlines()]
     assert out.returncode == 1 and events[-1]["event"] == "certificate_mismatch"
+
+
+# --- several consoles ------------------------------------------------------------
+
+def console_settings(**env):
+    # The module-level settings of backup.py for this environment, read in a
+    # fresh interpreter (they are fixed at import).
+    out = subprocess.run(
+        [sys.executable, "-c", "import json, backup; print(json.dumps({k: str(getattr(backup, k)) if k == 'BACKUP_DIR' "
+         "else getattr(backup, k) for k in ('CONSOLE', 'HOST', 'USERNAME', 'PASSWORD', 'SITE', 'NAME', 'LABEL', "
+         "'BACKUP_DIR', 'VERIFY_SSL', 'NETWORK_BACKUP', 'SYSTEM_BACKUP', 'CERT_SHA256', 'RETENTION_DAYS')}))"],
+        capture_output=True, text=True, check=True, cwd=os.path.dirname(backup.__file__),
+        env={**{k: v for k, v in os.environ.items() if not k.startswith(("UCG_", "WEBHOOK", "LOCAL_BACKUP"))}, **env},
+    )
+    return json.loads(out.stdout)
+
+
+SECOND = {
+    "UCG_HOST": "192.0.2.1", "UCG_USERNAME": "one", "UCG_PASSWORD": "pw-one", "UCG_SITE": "first",
+    "UCG_HOST_2": "192.0.2.2", "UCG_USERNAME_2": "two", "UCG_PASSWORD_2": "pw-two", "UCG_SITE_2": "second",
+    "NETWORK_BACKUP_2": "false", "VERIFY_SSL_2": "true", "UCG_CERT_SHA256_2": "AB" * 32, "RETENTION_DAYS": "7",
+}
+
+
+def test_a_single_console_reads_the_names_without_a_suffix_and_writes_to_the_root():
+    got = console_settings(**SECOND)
+    assert (got["CONSOLE"], got["HOST"], got["USERNAME"], got["SITE"]) == (1, "192.0.2.1", "one", "first")
+    assert got["NAME"] == "" and got["LABEL"] is None and got["BACKUP_DIR"] == "/backups"
+    assert got["NETWORK_BACKUP"] is True and got["VERIFY_SSL"] is False and got["CERT_SHA256"] == ""
+
+
+def test_console_2_reads_only_its_own_suffixed_settings():
+    got = console_settings(UCG_CONSOLE="2", **SECOND)
+    assert (got["CONSOLE"], got["HOST"], got["USERNAME"], got["PASSWORD"], got["SITE"]) == \
+        (2, "192.0.2.2", "two", "pw-two", "second")
+    assert got["NETWORK_BACKUP"] is False and got["SYSTEM_BACKUP"] is True and got["VERIFY_SSL"] is True
+    assert got["CERT_SHA256"] == "ab" * 32
+    assert got["RETENTION_DAYS"] == 7  # shared
+
+
+def test_console_2_takes_nothing_over_from_console_1():
+    got = console_settings(UCG_CONSOLE="2", UCG_HOST_2="192.0.2.2", UCG_SITE="first", UCG_USERNAME="one",
+                           NETWORK_BACKUP="false", VERIFY_SSL="true")
+    assert got["USERNAME"] == "" and got["SITE"] == "default"
+    assert got["NETWORK_BACKUP"] is True and got["VERIFY_SSL"] is False
+
+
+@pytest.mark.parametrize("env, name, label, folder", [
+    ({"UCG_CONSOLE": "2"}, "console-2", "console-2", "/backups/console-2"),
+    ({"UCG_CONSOLE": "2", "UCG_NAME_2": " nvr "}, "nvr", "nvr", "/backups/nvr"),
+    ({"UCG_CONSOLE": "1"}, "", "console-1", "/backups"),
+    ({"UCG_CONSOLE": "1", "UCG_NAME": "gateway"}, "gateway", "gateway", "/backups/gateway"),
+    ({"UCG_NAME": "gateway"}, "gateway", "gateway", "/backups/gateway"),
+    ({"UCG_CONSOLE": "12", "UCG_NAME_12": "x", "LOCAL_BACKUP_DIR": "/data"}, "x", "x", "/data/x"),
+])
+def test_the_console_name_picks_the_folder_and_the_label(env, name, label, folder):
+    got = console_settings(**env)
+    assert (got["NAME"], got["LABEL"], got["BACKUP_DIR"]) == (name, label, folder)
+
+
+@pytest.mark.parametrize("name", ["a/b", "..", "a b", "ä"])
+def test_main_rejects_a_console_name_that_is_no_folder_name(settings, monkeypatch, name):
+    monkeypatch.setattr(backup, "NAME", name)
+    with pytest.raises(backup.ConfigError, match="UCG_NAME may only contain"):
+        backup.main(new_run())
+
+
+@pytest.mark.parametrize("value", ["0", "x", "-1", "2.0", "12345"])
+def test_a_bad_ucg_console_is_config_invalid(value):
+    out = run_entry_point({"UCG_CONSOLE": value, "UCG_HOST": "192.0.2.1", "UCG_USERNAME": "u", "UCG_PASSWORD": "p"})
+    events = [json.loads(line) for line in out.stdout.splitlines()]
+    assert out.returncode == 1 and events[-1]["event"] == "config_invalid" and "UCG_CONSOLE" in events[-1]["error"]
+
+
+def test_errors_of_console_2_name_its_suffixed_settings():
+    out = run_entry_point({"UCG_CONSOLE": "2", "UCG_HOST_2": "192.0.2.2", "UCG_USERNAME": "u", "UCG_PASSWORD": "p"})
+    events = [json.loads(line) for line in out.stdout.splitlines()]
+    assert events[0]["event"] == "starting" and events[0]["console"] == "console-2"
+    assert events[0]["backup_dir"] == "/backups/console-2"
+    assert events[-1]["error"] == "Missing required setting(s): UCG_USERNAME_2, UCG_PASSWORD_2"
+
+
+def test_console_2_runs_into_its_own_folder_and_names_itself_in_the_webhook(settings, monkeypatch, capsys):
+    sent = {}
+    folder = settings / "nvr"
+    monkeypatch.setattr(backup, "BACKUP_DIR", folder)
+    monkeypatch.setattr(backup, "CONSOLE_SET", "2")
+    monkeypatch.setattr(backup, "LABEL", "nvr")
+    monkeypatch.setattr(backup, "WEBHOOK_URL", "https://hook.example/secret")
+    monkeypatch.setattr(requests, "Session", lambda: FakeSession())
+    monkeypatch.setattr(requests, "post", lambda url, **kw: sent.update(kw) or FakeResponse())
+    run = new_run()
+    backup.main(run)
+    assert len(list(folder.glob("ucg-*"))) == 2 and not list(settings.glob("ucg-*"))
+    first = json.loads(capsys.readouterr().out.splitlines()[0])
+    assert list(first)[:5] == ["ts", "level", "event", "version", "console"] and first["console"] == "nvr"
+    backup.notify(False, "boom", run)
+    assert sent["data"] == b"UCG backup FAILED [nvr]: boom"
+    monkeypatch.setattr(backup, "WEBHOOK_FORMAT", "json")
+    backup.notify(True, "fine", run)
+    assert sent["json"]["console"] == "nvr"
+
+
+def test_a_single_console_leaves_log_and_webhook_as_they_were(settings, monkeypatch, capsys):
+    sent = {}
+    monkeypatch.setattr(backup, "WEBHOOK_URL", "https://hook.example/secret")
+    monkeypatch.setattr(requests, "Session", lambda: FakeSession())
+    monkeypatch.setattr(requests, "post", lambda url, **kw: sent.update(kw) or FakeResponse())
+    run = new_run()
+    backup.main(run)
+    first = json.loads(capsys.readouterr().out.splitlines()[0])
+    assert "console" not in first and list(first)[:5] == ["ts", "level", "event", "version", "host"]
+    backup.notify(False, "boom", run)
+    assert sent["data"] == b"UCG backup FAILED: boom"
+    assert backup.build_payload(False, "boom", run)["console"] is None
+
+
+def test_a_named_single_console_shows_its_name_in_json_but_not_in_text(settings, monkeypatch):
+    sent = {}
+    monkeypatch.setattr(backup, "LABEL", "gateway")
+    monkeypatch.setattr(backup, "WEBHOOK_URL", "https://hook.example/secret")
+    monkeypatch.setattr(requests, "post", lambda url, **kw: sent.update(kw) or FakeResponse())
+    run = new_run()
+    backup.notify(False, "boom", run)
+    assert sent["data"] == b"UCG backup FAILED: boom"
+    assert backup.build_payload(False, "boom", run)["console"] == "gateway"
+

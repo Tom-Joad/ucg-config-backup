@@ -82,6 +82,20 @@ expect_stop "a UCG_HOST with a scheme" 'ERROR: UCG_HOST must be a host name' -e 
 FORBIDDEN=smoke-secret expect_stop "a WEBHOOK_URL without a scheme" 'ERROR: WEBHOOK_URL must start with http' \
     -e WEBHOOK_URL=homeassistant.local:8123/api/webhook/smoke-secret
 expect_stop "LSIO_NON_ROOT_USER" 'ERROR: LSIO_NON_ROOT_USER is not supported' -e LSIO_NON_ROOT_USER=true
+# A second console: its settings end in _2, and nothing is taken over from
+# the first one.
+CONSOLE2=(-e UCG_HOST_2=y -e UCG_USERNAME_2=x -e UCG_PASSWORD_2=x)
+expect_stop "a console setting without its UCG_HOST_N" 'ERROR: UCG_USERNAME_3 is set, but UCG_HOST_3 is not' \
+    -e UCG_USERNAME_3=x
+expect_stop "a setting with the suffix _1" 'ERROR: UCG_HOST_1 is not a setting' -e UCG_HOST_1=y
+expect_stop "a second console without a password" 'ERROR: UCG_PASSWORD_2 is required' \
+    -e UCG_HOST_2=y -e UCG_USERNAME_2=x
+expect_stop "VERIFY_SSL_2=yes" "ERROR: VERIFY_SSL_2 must be 'true' or 'false'" "${CONSOLE2[@]}" -e VERIFY_SSL_2=yes
+expect_stop "a console name with a slash" 'ERROR: UCG_NAME_2 may only contain' "${CONSOLE2[@]}" -e UCG_NAME_2=a/b
+expect_stop "two consoles with the same name" "both use the folder name 'nvr'" \
+    "${CONSOLE2[@]}" -e UCG_NAME=NVR -e UCG_NAME_2=nvr
+expect_stop "a name that is another console's default" "both use the folder name 'console-2'" \
+    "${CONSOLE2[@]}" -e UCG_NAME=console-2
 
 echo "== without any volume the schedule is installed"
 docker run -d --name "$NAME" -e UCG_HOST=x -e UCG_USERNAME=x -e UCG_PASSWORD=x \
@@ -226,6 +240,33 @@ grep -q '"level":"ERROR","event":"run_failed","error":"Download is only' "$WORK/
 [[ -z $(find "$WORK/stub-backups" -name 'ucg-*') ]] || fail "an error text was kept as a backup"
 for _ in $(seq 1 10); do grep -q '"status": *"failed"' "$HOOKS" && break; sleep 1; done
 grep -q '"status": *"failed"' "$HOOKS" || fail "no failure webhook arrived"
+docker rm -f "$NAME" >/dev/null
+
+echo "== two consoles: one fails, the other is still backed up into its own folder"
+reset_stub_backups
+: > "$HOOKS"
+SECRET2=smoke-second-password-$$
+start_stub_container err200 -e NOTIFY_ON_SUCCESS=true \
+    -e UCG_HOST_2="host.docker.internal:$TLS_PORT" -e UCG_USERNAME_2=smoke2 -e UCG_PASSWORD_2="$SECRET2" \
+    -e UCG_SITE_2=good -e UCG_NAME_2=nvr
+in_log 'Consoles: 2 \(console-1 nvr\)' || fail "the init step did not list both consoles"
+set +e
+docker exec "$NAME" /usr/local/bin/ucg-backup >"$WORK/run.out" 2>&1; rc=$?
+set -e
+[[ $rc == 1 ]] || fail "a run with one failed console exited $rc, not 1"
+grep -q '"event":"starting","version":"[0-9.]*","console":"console-1"' "$WORK/run.out" || fail "no starting line of console 1: $(cat "$WORK/run.out")"
+grep -q '"event":"starting","version":"[0-9.]*","console":"nvr"' "$WORK/run.out" || fail "no starting line of console 2"
+grep -q '"level":"ERROR","event":"run_summary","consoles":2,"failed":1,"failed_consoles":"console-1"' "$WORK/run.out" \
+    || fail "no run summary naming the failed console: $(cat "$WORK/run.out")"
+[[ $(find "$WORK/stub-backups/nvr" -name 'ucg-backup-*.unf' | wc -l) == 1 ]] || fail "no Network backup in /backups/nvr"
+[[ $(find "$WORK/stub-backups/nvr" -name 'ucg-system-backup-*.unifi' | wc -l) == 1 ]] || fail "no system backup in /backups/nvr"
+[[ -z $(find "$WORK/stub-backups" -maxdepth 1 -name 'ucg-*') ]] || fail "console 1 kept its error text, or console 2 wrote to the root"
+for _ in $(seq 1 10); do [[ $(wc -l <"$HOOKS") -ge 2 ]] && break; sleep 1; done
+[[ $(wc -l <"$HOOKS") == 2 ]] || fail "expected two webhooks, got: $(cat "$HOOKS")"
+grep -q '"status": *"failed".*"console": *"console-1"' "$HOOKS" || fail "no failure webhook of console 1: $(cat "$HOOKS")"
+grep -q '"status": *"ok".*"console": *"nvr"' "$HOOKS" || fail "no success webhook of console 2: $(cat "$HOOKS")"
+if grep -q "$SECRET2" "$WORK/run.out" || in_log "$SECRET2"; then fail "the log shows the second console's password"; fi
+if docker exec "$NAME" grep -rqs "$SECRET2" /backups /etc /tmp; then fail "the second console's password was written to a file"; fi
 docker rm -f "$NAME" >/dev/null
 
 echo "== a hanging download is stopped, and skipped runs raise an alarm"

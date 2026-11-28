@@ -1,14 +1,14 @@
 #!/usr/bin/with-contenv bash
 # shellcheck shell=bash
 
-# with-contenv puts the container environment (including the password, which
-# never touches the file system) into this process. UMASK only applies to
-# s6 services on its own, not to cron jobs.
+# with-contenv puts the container environment (the password included) into
+# this process; no setting is read from a file of the app's own. UMASK only
+# applies to s6 services on its own, not to cron jobs.
 umask "${UMASK:-022}"
 
 # One backup at a time: the start-up run and a scheduled one, or a manual
 # `docker exec`, must not log in to the console side by side. The lock is
-# held on fd 9 through the exec below.
+# held on fd 9 until the last console is done.
 # The wrapper's own messages are JSON lines like backup.py's (standards/runtime.md).
 log() { # level event [field=value ...]; values are plain text without quotes
     local level=$1 event=$2 tz fields="" pair value
@@ -65,7 +65,28 @@ fi
 rm -f "${SKIPS}"
 
 # Backstop behind the run's own RUN_TIMEOUT (a stuck name lookup doesn't
-# reach Python's signal handler): the lock goes with the process.
+# reach Python's signal handler): the lock goes with the process. Each
+# console has its own.
 limit=${RUN_TIMEOUT:-1800}
 [[ ${limit} =~ ^[0-9]+$ ]] || limit=1800 # a bad value is reported by backup.py
-exec timeout -s KILL "$((limit + 120))" "${run[@]}" "$@"
+run=(timeout -s KILL "$((limit + 120))" "${run[@]}")
+
+# shellcheck source=/dev/null
+source /usr/local/lib/ucg-config-backup/consoles.sh
+mapfile -t consoles < <(ucg_consoles)
+# A single console runs as it always did; UCG_CONSOLE stays unset.
+if (( ${#consoles[@]} == 1 )); then
+    exec "${run[@]}" "$@"
+fi
+
+# One process per console, one after the other: a console that fails or
+# hangs doesn't stop the others, and each one reports for itself.
+failed=()
+for n in "${consoles[@]}"; do
+    UCG_CONSOLE=${n} "${run[@]}" "$@" || failed+=("$(ucg_console_label "${n}")")
+done
+if (( ${#failed[@]} )); then
+    log ERROR run_summary "consoles=${#consoles[@]}" "failed=${#failed[@]}" "failed_consoles=${failed[*]}"
+    exit 1
+fi
+log INFO run_summary "consoles=${#consoles[@]}" "failed=0"

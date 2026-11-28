@@ -8,12 +8,20 @@
 # bug report shows the version even when a setting is wrong.
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] ucg-config-backup $(python3 /usr/local/bin/backup.py --version) starting"
 
+# shellcheck source=/dev/null
+source /usr/local/lib/ucg-config-backup/consoles.sh
+
 failed=0
-for name in UCG_HOST UCG_USERNAME UCG_PASSWORD; do
-    if [[ -z ${!name:-} ]]; then
-        echo "ERROR: ${name} is required" >&2
-        failed=1
-    fi
+mapfile -t consoles < <(ucg_consoles)
+ucg_check_suffixes || failed=1
+for n in "${consoles[@]}"; do
+    for name in UCG_HOST UCG_USERNAME UCG_PASSWORD; do
+        name+=$(ucg_suffix "${n}")
+        if [[ -z ${!name:-} ]]; then
+            echo "ERROR: ${name} is required" >&2
+            failed=1
+        fi
+    done
 done
 
 # The job runs from root's crontab (see below), which a non-root container
@@ -23,28 +31,80 @@ if [[ -n ${LSIO_NON_ROOT_USER:-} ]]; then
     exit 1
 fi
 
-# Value of a setting without surrounding blanks; empty means "not set".
-setting() {
-    local value=${!1:-}
-    value=${value#"${value%%[![:space:]]*}"}
-    value=${value%"${value##*[![:space:]]}"}
-    printf '%s' "${value}"
-}
+setting() { ucg_trimmed "$1"; }
 
-for name in VERIFY_SSL NOTIFY_ON_SUCCESS RUN_ON_START NETWORK_BACKUP SYSTEM_BACKUP; do
-    value=$(setting "${name}")
+check_bool() {
+    local value
+    value=$(setting "$1")
     if [[ -n ${value} && ${value,,} != true && ${value,,} != false ]]; then
-        echo "ERROR: ${name} must be 'true' or 'false', got '${value}'" >&2
+        echo "ERROR: $1 must be 'true' or 'false', got '${value}'" >&2
         failed=1
     fi
+}
+
+for name in NOTIFY_ON_SUCCESS RUN_ON_START; do
+    check_bool "${name}"
 done
 
-network=$(setting NETWORK_BACKUP)
-system=$(setting SYSTEM_BACKUP)
-if [[ ${network,,} == false && ${system,,} == false ]]; then
-    echo "ERROR: NETWORK_BACKUP and SYSTEM_BACKUP are both 'false', so there is nothing to back up" >&2
-    failed=1
-fi
+# The settings each console has for itself, with its suffix (none for
+# console 1).
+host_re='^([A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?|\[[0-9A-Fa-f:.]+\])(:([0-9]{1,5}))?$'
+declare -A folder_of=()
+for n in "${consoles[@]}"; do
+    sfx=$(ucg_suffix "${n}")
+    for name in VERIFY_SSL NETWORK_BACKUP SYSTEM_BACKUP; do
+        check_bool "${name}${sfx}"
+    done
+
+    network=$(setting "NETWORK_BACKUP${sfx}")
+    system=$(setting "SYSTEM_BACKUP${sfx}")
+    if [[ ${network,,} == false && ${system,,} == false ]]; then
+        echo "ERROR: NETWORK_BACKUP${sfx} and SYSTEM_BACKUP${sfx} are both 'false', so there is nothing to back up" >&2
+        failed=1
+    fi
+
+    # The site name goes into a URL path.
+    value=$(setting "UCG_SITE${sfx}")
+    if [[ -n ${value} && ! ${value} =~ ^[A-Za-z0-9_-]+$ ]]; then
+        echo "ERROR: UCG_SITE${sfx} may only contain letters, digits, '-' and '_', got '${value}'" >&2
+        failed=1
+    fi
+
+    # A SHA-256 fingerprint: 64 hex digits, colons optional.
+    value=$(setting "UCG_CERT_SHA256${sfx}")
+    if [[ -n ${value} && ! ${value//:/} =~ ^[0-9A-Fa-f]{64}$ ]]; then
+        echo "ERROR: UCG_CERT_SHA256${sfx} must be a SHA-256 fingerprint: 64 hex digits, with or without colons" >&2
+        failed=1
+    fi
+
+    # A host name, IPv4 or bracketed IPv6 address, optionally with :port. A
+    # value copied from the browser (https://192.168.1.1/) would build
+    # https://https://...
+    value=$(setting "UCG_HOST${sfx}")
+    if [[ -n ${value} ]] && { [[ ! ${value} =~ ${host_re} ]] || (( 10#${BASH_REMATCH[4]:-0} > 65535 )); }; then
+        echo "ERROR: UCG_HOST${sfx} must be a host name or IP address, optionally with :port, without https:// or a path, got '${value}'" >&2
+        failed=1
+    fi
+
+    # The name is the console's folder below /backups (console 1 without a
+    # name writes to /backups itself). Two consoles in one folder would
+    # expire each other's backups; case-insensitive file systems (SMB,
+    # macOS) would merge "NVR" and "nvr".
+    value=$(setting "UCG_NAME${sfx}")
+    if [[ -n ${value} && ! ${value} =~ ^[A-Za-z0-9_-]+$ ]]; then
+        echo "ERROR: UCG_NAME${sfx} may only contain letters, digits, '-' and '_', got '${value}'" >&2
+        failed=1
+    fi
+    if [[ -n ${value} || ${n} != 1 ]]; then
+        folder=$(ucg_console_label "${n}")
+        if [[ -n ${folder_of[${folder,,}]:-} ]]; then
+            echo "ERROR: console ${folder_of[${folder,,}]} and console ${n} both use the folder name '${folder}' (UCG_NAME, or console-N without one): give each its own UCG_NAME${sfx}" >&2
+            failed=1
+        else
+            folder_of[${folder,,}]=${n}
+        fi
+    fi
+done
 
 value=$(setting RETENTION_DAYS)
 if [[ -n ${value} && ! ${value} =~ ^[0-9]+$ ]]; then
@@ -58,23 +118,9 @@ if [[ -n ${value} ]] && { [[ ! ${value} =~ ^[0-9]+$ ]] || (( 10#${value} < 1 ));
     failed=1
 fi
 
-# The site name goes into a URL path.
-value=$(setting UCG_SITE)
-if [[ -n ${value} && ! ${value} =~ ^[A-Za-z0-9_-]+$ ]]; then
-    echo "ERROR: UCG_SITE may only contain letters, digits, '-' and '_', got '${value}'" >&2
-    failed=1
-fi
-
 value=$(setting LOG_LEVEL)
 if [[ -n ${value} && ! ${value^^} =~ ^(DEBUG|INFO|WARNING|ERROR)$ ]]; then
     echo "ERROR: LOG_LEVEL must be DEBUG, INFO, WARNING or ERROR, got '${value}'" >&2
-    failed=1
-fi
-
-# A SHA-256 fingerprint: 64 hex digits, colons optional.
-value=$(setting UCG_CERT_SHA256)
-if [[ -n ${value} && ! ${value//:/} =~ ^[0-9A-Fa-f]{64}$ ]]; then
-    echo "ERROR: UCG_CERT_SHA256 must be a SHA-256 fingerprint: 64 hex digits, with or without colons" >&2
     failed=1
 fi
 
@@ -88,15 +134,6 @@ fi
 value=$(setting WEBHOOK_URL)
 if [[ -n ${value} && ! ${value} =~ ^https?://[^[:space:]/]+ ]]; then
     echo "ERROR: WEBHOOK_URL must start with http:// or https://" >&2
-    failed=1
-fi
-
-# A host name, IPv4 or bracketed IPv6 address, optionally with :port. A value
-# copied from the browser (https://192.168.1.1/) would build https://https://...
-value=$(setting UCG_HOST)
-host_re='^([A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?|\[[0-9A-Fa-f:.]+\])(:([0-9]{1,5}))?$'
-if [[ -n ${value} ]] && { [[ ! ${value} =~ ${host_re} ]] || (( 10#${BASH_REMATCH[4]:-0} > 65535 )); }; then
-    echo "ERROR: UCG_HOST must be a host name or IP address, optionally with :port, without https:// or a path, got '${value}'" >&2
     failed=1
 fi
 
@@ -201,3 +238,8 @@ if ! printf '%s\n%s\n' "${base_crontab}" \
 fi
 
 echo "Scheduled backup: '${CRON_SCHEDULE}' (container timezone: $(date +%Z))"
+if (( ${#consoles[@]} > 1 )); then
+    labels=()
+    for n in "${consoles[@]}"; do labels+=("$(ucg_console_label "${n}")"); done
+    echo "Consoles: ${#consoles[@]} (${labels[*]}), backed up one after the other"
+fi
